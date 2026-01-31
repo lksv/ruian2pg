@@ -79,7 +79,7 @@ uv run python scripts/import_notice_boards.py --stats
 uv run python scripts/generate_test_references.py --cadastral-name "Veveří"
 
 # Generate with custom counts
-uv run python scripts/generate_test_references.py --cadastral-code 610186 --parcels 20 --addresses 15 --streets 5
+uv run python scripts/generate_test_references.py --cadastral-code 610186 --parcels 20 --addresses 15 --streets 5 --buildings 10
 
 # Cleanup test data
 uv run python scripts/generate_test_references.py --cleanup
@@ -112,7 +112,8 @@ scripts/
 ├── import_notice_boards.py      # Import notice boards JSON to database
 ├── generate_test_references.py  # Generate test data for map rendering validation
 ├── setup_notice_boards_db.sql   # DB migration for notice boards
-└── migrate_notice_boards_v2.sql # Migration v2: adds nutslau, coat_of_arms_url
+├── migrate_notice_boards_v2.sql # Migration v2: adds nutslau, coat_of_arms_url
+└── migrate_notice_boards_v3.sql # Migration v3: adds building_refs table
 
 tests/
 ├── test_config.py              # Tests for RUIAN configuration
@@ -168,6 +169,12 @@ podman run -d --name martin -p 3000:3000 \
   -v ./martin/martin.yaml:/config.yaml:ro \
   ghcr.io/maplibre/martin --config /config.yaml
 
+# Start with debug logging (verbose startup info)
+podman run -d --name martin -p 3000:3000 \
+  -e RUST_LOG=debug \
+  -v ./martin/martin.yaml:/config.yaml:ro \
+  ghcr.io/maplibre/martin --config /config.yaml
+
 # Serve frontend (development)
 cd web && python3 -m http.server 8080
 
@@ -209,8 +216,9 @@ The `martin/martin.yaml` configures which tables and geometry columns to serve:
 - `parcels_with_documents` - parcels referenced in notice board documents (red)
 - `addresses_with_documents` - addresses referenced in documents (magenta)
 - `streets_with_documents` - streets referenced in documents (orange)
+- `buildings_with_documents` - buildings referenced in documents (cyan)
 
-Note: Document reference layers require PostGIS 3.5+ for correct rendering. The functions transform EPSG:5514 to EPSG:3857 for tile generation.
+Note: Recommended PostGIS 3.5+ for correct tile rendering. The functions transform EPSG:5514 to EPSG:3857 for tile generation.
 
 ## Notice Board Documents
 
@@ -222,6 +230,7 @@ System for downloading documents from official notice boards of municipalities, 
 # Apply migrations
 psql -U ruian -d ruian -f scripts/setup_notice_boards_db.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v2.sql
+psql -U ruian -d ruian -f scripts/migrate_notice_boards_v3.sql
 ```
 
 Tables created:
@@ -233,12 +242,14 @@ Tables created:
 - `parcel_refs` - Parcel references extracted from documents
 - `address_refs` - Address references extracted from documents
 - `street_refs` - Street references extracted from documents
+- `building_refs` - Building references extracted from documents
 - `lv_refs` - Ownership sheet references
 
 Martin function sources:
 - `parcels_with_documents(z, x, y)` - Parcels with document references
 - `streets_with_documents(z, x, y)` - Streets with document references
 - `addresses_with_documents(z, x, y)` - Addresses with document references
+- `buildings_with_documents(z, x, y)` - Buildings with document references
 
 ### Key Classes
 
@@ -246,6 +257,7 @@ Martin function sources:
 - `validate_parcel(cadastral_area_code/name, parcel_number, parcel_sub_number)` - Check if parcel exists in RUIAN
 - `validate_address(municipality_code/name, street_code/name, house_number, orientation_number)` - Check if address exists
 - `validate_street(municipality_code/name, street_name)` - Check if street exists
+- `validate_building(building_code, municipality_code/name, part_of_municipality_name, house_number)` - Check if building exists
 - `find_cadastral_area(name/code)` - Lookup cadastral area
 - `find_municipality(name/code)` - Lookup municipality
 

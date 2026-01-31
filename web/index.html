@@ -204,6 +204,12 @@
             <span class="layer-color" style="background: #ff6600;"></span>
             Streets with Docs
         </label>
+
+        <label>
+            <input type="checkbox" id="toggle-buildings_with_documents" checked>
+            <span class="layer-color" style="background: rgba(0, 200, 255, 0.5); border-color: #00a0cc;"></span>
+            Buildings with Docs
+        </label>
     </div>
 
     <script>
@@ -330,6 +336,15 @@
                         16, 6
                     ]
                 }
+            },
+            buildings_with_documents: {
+                type: 'fill',
+                minzoom: 13,
+                paint: {
+                    'fill-color': '#00c8ff',
+                    'fill-opacity': 0.5,
+                    'fill-outline-color': '#00a0cc'
+                }
             }
         };
 
@@ -373,7 +388,8 @@
             okresy: 'District',
             parcels_with_documents: 'Parcel with Document',
             addresses_with_documents: 'Address with Document',
-            streets_with_documents: 'Street with Document'
+            streets_with_documents: 'Street with Document',
+            buildings_with_documents: 'Building with Document'
         };
 
         // Initialize map
@@ -465,7 +481,7 @@
             document.getElementById('loading').classList.add('hidden');
 
             // Add layers in order (bottom to top)
-            const layerOrder = ['okresy', 'obce', 'katastralniuzemi', 'parcely', 'ulice', 'stavebniobjekty', 'adresnimista', 'parcels_with_documents', 'streets_with_documents', 'addresses_with_documents'];
+            const layerOrder = ['okresy', 'obce', 'katastralniuzemi', 'parcely', 'ulice', 'stavebniobjekty', 'adresnimista', 'parcels_with_documents', 'buildings_with_documents', 'streets_with_documents', 'addresses_with_documents'];
 
             for (const layerId of layerOrder) {
                 const layerConfig = LAYERS[layerId];

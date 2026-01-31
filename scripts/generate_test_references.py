@@ -11,9 +11,9 @@ Usage:
     # Generate test data for a cadastral area by name
     uv run python scripts/generate_test_references.py --cadastral-name "Veveří"
 
-    # Generate with custom count
+    # Generate with custom counts
     uv run python scripts/generate_test_references.py --cadastral-code 610186 \
-        --parcels 20 --addresses 15 --streets 5
+        --parcels 20 --addresses 15 --streets 5 --buildings 10
 
     # Cleanup generated test data
     uv run python scripts/generate_test_references.py --cleanup
@@ -77,6 +77,16 @@ class StreetInfo:
     street_code: int
     municipality_name: str
     street_name: str
+
+
+@dataclass
+class BuildingInfo:
+    """Information about a building."""
+
+    building_code: int
+    municipality_name: str
+    part_of_municipality_name: str | None
+    house_number: int | None
 
 
 def find_cadastral_area(
@@ -213,6 +223,42 @@ def get_random_streets(
                 street_code=row[0],
                 municipality_name=row[1],
                 street_name=row[2],
+            )
+            for row in cur.fetchall()
+        ]
+
+
+def get_random_buildings(
+    conn: Connection,
+    municipality_code: int,
+    limit: int = 10,
+) -> list[BuildingInfo]:
+    """Get random buildings from municipality.
+
+    Note: Buildings are linked to parts of municipality (castobce),
+    which belong to municipalities.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT so.kod, o.nazev as obec, co.nazev as cast_obce, so.cislodomovni[1]
+            FROM stavebniobjekty so
+            JOIN castiobci co ON co.kod = so.castobcekod
+            JOIN obce o ON o.kod = co.obeckod
+            WHERE co.obeckod = %s
+              AND so.originalnihranice IS NOT NULL
+            ORDER BY RANDOM()
+            LIMIT %s
+            """,
+            (municipality_code, limit),
+        )
+
+        return [
+            BuildingInfo(
+                building_code=row[0],
+                municipality_name=row[1],
+                part_of_municipality_name=row[2],
+                house_number=row[3],
             )
             for row in cur.fetchall()
         ]
@@ -436,53 +482,103 @@ def create_street_refs(
             )
 
 
+def _table_exists(cur: Any, table_name: str) -> bool:
+    """Check if a table exists in the database."""
+    cur.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = %s
+        )
+        """,
+        (table_name,),
+    )
+    result = cur.fetchone()
+    return bool(result and result[0])
+
+
+def create_building_refs(
+    conn: Connection,
+    attachment_id: int,
+    buildings: list[BuildingInfo],
+    ref_type_id: int,
+) -> bool:
+    """Create building references.
+
+    Returns:
+        True if references were created, False if building_refs table doesn't exist.
+    """
+    with conn.cursor() as cur:
+        # Check if building_refs table exists (migration v3)
+        if not _table_exists(cur, "building_refs"):
+            return False
+
+        for building in buildings:
+            # Generate raw_text
+            parts = []
+            if building.house_number:
+                parts.append(f"č.p. {building.house_number}")
+            if building.part_of_municipality_name:
+                parts.append(building.part_of_municipality_name)
+            if building.municipality_name and not parts:
+                parts.append(building.municipality_name)
+            raw_text = ", ".join(parts) if parts else f"budova {building.building_code}"
+
+            cur.execute(
+                """
+                INSERT INTO building_refs (
+                    attachment_id, ref_type_id, building_code,
+                    municipality_name, part_of_municipality_name,
+                    house_number, raw_text, confidence
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, 1.0)
+                ON CONFLICT (attachment_id, building_code, ref_type_id) DO NOTHING
+                """,
+                (
+                    attachment_id,
+                    ref_type_id,
+                    building.building_code,
+                    building.municipality_name,
+                    building.part_of_municipality_name,
+                    building.house_number,
+                    raw_text,
+                ),
+            )
+        return True
+
+
 def cleanup_test_data(conn: Connection) -> int:
     """Remove all test data (board_type='test'). Returns count of deleted boards."""
     with conn.cursor() as cur:
+        # Subquery for test attachment IDs
+        test_attachments_subquery = """
+            SELECT a.id FROM attachments a
+            JOIN documents d ON d.id = a.document_id
+            JOIN notice_boards nb ON nb.id = d.notice_board_id
+            WHERE nb.board_type = 'test'
+        """
+
         # Delete references first (cascade should handle this, but be explicit)
         cur.execute(
-            """
-            DELETE FROM parcel_refs WHERE attachment_id IN (
-                SELECT a.id FROM attachments a
-                JOIN documents d ON d.id = a.document_id
-                JOIN notice_boards nb ON nb.id = d.notice_board_id
-                WHERE nb.board_type = 'test'
-            )
-            """
+            f"DELETE FROM parcel_refs WHERE attachment_id IN ({test_attachments_subquery})"
         )
 
         cur.execute(
-            """
-            DELETE FROM address_refs WHERE attachment_id IN (
-                SELECT a.id FROM attachments a
-                JOIN documents d ON d.id = a.document_id
-                JOIN notice_boards nb ON nb.id = d.notice_board_id
-                WHERE nb.board_type = 'test'
-            )
-            """
+            f"DELETE FROM address_refs WHERE attachment_id IN ({test_attachments_subquery})"
         )
 
         cur.execute(
-            """
-            DELETE FROM street_refs WHERE attachment_id IN (
-                SELECT a.id FROM attachments a
-                JOIN documents d ON d.id = a.document_id
-                JOIN notice_boards nb ON nb.id = d.notice_board_id
-                WHERE nb.board_type = 'test'
-            )
-            """
+            f"DELETE FROM street_refs WHERE attachment_id IN ({test_attachments_subquery})"
         )
 
         cur.execute(
-            """
-            DELETE FROM lv_refs WHERE attachment_id IN (
-                SELECT a.id FROM attachments a
-                JOIN documents d ON d.id = a.document_id
-                JOIN notice_boards nb ON nb.id = d.notice_board_id
-                WHERE nb.board_type = 'test'
-            )
-            """
+            f"DELETE FROM lv_refs WHERE attachment_id IN ({test_attachments_subquery})"
         )
+
+        # building_refs table may not exist if migration v3 wasn't applied
+        if _table_exists(cur, "building_refs"):
+            cur.execute(
+                f"DELETE FROM building_refs WHERE attachment_id IN ({test_attachments_subquery})"
+            )
 
         # Delete attachments
         cur.execute(
@@ -518,6 +614,7 @@ def build_json_summary(
     parcels: list[ParcelInfo],
     addresses: list[AddressInfo],
     streets: list[StreetInfo],
+    buildings: list[BuildingInfo],
 ) -> dict[str, Any]:
     """Build JSON summary for extracted_text field."""
     return {
@@ -572,6 +669,19 @@ def build_json_summary(
                 }
                 for s in streets
             ],
+            "buildings": [
+                {
+                    "building_code": b.building_code,
+                    "municipality_name": b.municipality_name,
+                    "part_of_municipality_name": b.part_of_municipality_name,
+                    "house_number": b.house_number,
+                    "raw_text": (
+                        (f"č.p. {b.house_number}, " if b.house_number else "")
+                        + (b.part_of_municipality_name or b.municipality_name or "")
+                    ).strip(", "),
+                }
+                for b in buildings
+            ],
         },
     }
 
@@ -608,6 +718,12 @@ def main() -> None:
         type=int,
         default=5,
         help="Number of street references to create (default: 5)",
+    )
+    parser.add_argument(
+        "--buildings",
+        type=int,
+        default=10,
+        help="Number of building references to create (default: 10)",
     )
     parser.add_argument(
         "--cleanup",
@@ -657,15 +773,19 @@ def main() -> None:
         parcels = get_random_parcels(conn, cadastral_area.code, args.parcels)
         addresses = get_random_addresses(conn, cadastral_area.municipality_code, args.addresses)
         streets = get_random_streets(conn, cadastral_area.municipality_code, args.streets)
+        buildings = get_random_buildings(conn, cadastral_area.municipality_code, args.buildings)
 
-        print(f"\nFound {len(parcels)} parcels, {len(addresses)} addresses, {len(streets)} streets")
+        print(
+            f"\nFound {len(parcels)} parcels, {len(addresses)} addresses, "
+            f"{len(streets)} streets, {len(buildings)} buildings"
+        )
 
-        if not parcels and not addresses and not streets:
+        if not parcels and not addresses and not streets and not buildings:
             print("Error: No RUIAN data found for this area.", file=sys.stderr)
             sys.exit(1)
 
         # 3. Build JSON summary
-        json_content = build_json_summary(cadastral_area, parcels, addresses, streets)
+        json_content = build_json_summary(cadastral_area, parcels, addresses, streets, buildings)
 
         # 4. Create notice_board, document, attachment
         board_id = create_notice_board(conn, cadastral_area)
@@ -689,6 +809,12 @@ def main() -> None:
         create_street_refs(conn, attachment_id, streets, ref_type_id)
         print(f"Created {len(streets)} street references")
 
+        building_refs_created = create_building_refs(conn, attachment_id, buildings, ref_type_id)
+        if building_refs_created:
+            print(f"Created {len(buildings)} building references")
+        else:
+            print("Skipped building references (table not found - run migrate_notice_boards_v3.sql)")
+
         conn.commit()
 
         # 6. Print summary
@@ -705,6 +831,10 @@ def main() -> None:
         print(f"Parcel refs: {len(parcels)}")
         print(f"Address refs: {len(addresses)}")
         print(f"Street refs: {len(streets)}")
+        if building_refs_created:
+            print(f"Building refs: {len(buildings)}")
+        else:
+            print("Building refs: skipped (migration v3 not applied)")
         print("\nTo cleanup: uv run python scripts/generate_test_references.py --cleanup")
 
     except Exception as e:

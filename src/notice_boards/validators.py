@@ -48,6 +48,19 @@ class StreetValidationResult:
     error: str | None = None
 
 
+@dataclass
+class BuildingValidationResult:
+    """Result of building validation."""
+
+    is_valid: bool
+    building_code: int | None = None
+    municipality_code: int | None = None
+    municipality_name: str | None = None
+    part_of_municipality_name: str | None = None
+    house_number: int | None = None
+    error: str | None = None
+
+
 class RuianValidator:
     """Validate extracted references against RUIAN database.
 
@@ -408,6 +421,115 @@ class RuianValidator:
 
         except Exception as e:
             return StreetValidationResult(
+                is_valid=False,
+                error=f"Database error: {e}",
+            )
+
+    def validate_building(
+        self,
+        *,
+        building_code: int | None = None,
+        municipality_code: int | None = None,
+        municipality_name: str | None = None,
+        part_of_municipality_name: str | None = None,
+        house_number: int | None = None,
+    ) -> BuildingValidationResult:
+        """Check if building exists in RUIAN.
+
+        Buildings in RUIAN are identified by various combinations:
+        - Building code (direct lookup)
+        - Municipality (by code or name)
+        - Part of municipality (část obce)
+        - House number (číslo popisné)
+
+        Args:
+            building_code: Building code from RUIAN (stavebniobjekty.kod)
+            municipality_code: Municipality code
+            municipality_name: Municipality name
+            part_of_municipality_name: Part of municipality name (část obce)
+            house_number: House number (číslo popisné)
+
+        Returns:
+            Validation result with building_code if found.
+
+        Note:
+            The RUIAN table 'stavebniobjekty' uses:
+            - kod: building code (primary identifier)
+            - castobcekod: part of municipality code
+            - cislodomovni: array of house numbers
+            Related tables: castiobci (parts of municipality), obce (municipalities)
+        """
+        # Need at least building_code or house_number for lookup
+        if building_code is None and house_number is None:
+            return BuildingValidationResult(
+                is_valid=False,
+                error="Either building_code or house_number must be provided",
+            )
+
+        try:
+            with self.db.cursor() as cur:
+                if building_code is not None:
+                    # Direct lookup by building code
+                    cur.execute(
+                        """
+                        SELECT so.kod, o.kod, o.nazev, co.nazev, so.cislodomovni[1]
+                        FROM stavebniobjekty so
+                        LEFT JOIN castiobci co ON co.kod = so.castobcekod
+                        LEFT JOIN obce o ON o.kod = co.obeckod
+                        WHERE so.kod = %s
+                        LIMIT 1
+                        """,
+                        (building_code,),
+                    )
+                else:
+                    # Build dynamic query based on available parameters
+                    # house_number is guaranteed to be non-None here due to earlier check
+                    assert house_number is not None
+                    conditions = ["so.cislodomovni @> ARRAY[%s]::integer[]"]
+                    params: list[int | str] = [house_number]
+
+                    if municipality_code is not None:
+                        conditions.append("o.kod = %s")
+                        params.append(municipality_code)
+                    elif municipality_name is not None:
+                        conditions.append("LOWER(o.nazev) = LOWER(%s)")
+                        params.append(municipality_name)
+
+                    if part_of_municipality_name is not None:
+                        conditions.append("LOWER(co.nazev) = LOWER(%s)")
+                        params.append(part_of_municipality_name)
+
+                    where_clause = " AND ".join(conditions)
+
+                    query = f"""
+                        SELECT so.kod, o.kod, o.nazev, co.nazev, so.cislodomovni[1]
+                        FROM stavebniobjekty so
+                        LEFT JOIN castiobci co ON co.kod = so.castobcekod
+                        LEFT JOIN obce o ON o.kod = co.obeckod
+                        WHERE {where_clause}
+                        LIMIT 1
+                    """
+
+                    cur.execute(query, params)
+
+                row = cur.fetchone()
+                if row:
+                    return BuildingValidationResult(
+                        is_valid=True,
+                        building_code=row[0],
+                        municipality_code=row[1],
+                        municipality_name=row[2],
+                        part_of_municipality_name=row[3],
+                        house_number=row[4],
+                    )
+                else:
+                    return BuildingValidationResult(
+                        is_valid=False,
+                        error="Building not found in RUIAN",
+                    )
+
+        except Exception as e:
+            return BuildingValidationResult(
                 is_valid=False,
                 error=f"Database error: {e}",
             )

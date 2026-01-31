@@ -1,5 +1,12 @@
 # Martin Tile Server Configuration for RUIAN Data
 # See: https://maplibre.org/martin/
+#
+# Logging: Use RUST_LOG environment variable to control log level:
+#   RUST_LOG=debug  - verbose output
+#   RUST_LOG=trace  - maximum verbosity (very noisy)
+#   RUST_LOG=info   - default
+#
+# Example: podman run -e RUST_LOG=debug ...
 
 # Server settings
 listen_addresses: '0.0.0.0:3000'
@@ -20,13 +27,15 @@ postgres:
 
   # Table configurations with specific geometry columns
   tables:
-    # Address points - main geometry
+    # Address points - main geometry (large table, explicit bounds)
     adresnimista:
       schema: public
       table: adresnimista
       srid: 5514
       geometry_column: geom
+      geometry_type: POINT
       id_column: ogc_fid
+      bounds: [12.09, 48.55, 18.86, 51.06]
       properties:
         kod: int4
         cislodomovni: int4
@@ -35,13 +44,15 @@ postgres:
         psc: int4
         ulicekod: int4
 
-    # Buildings - polygon boundaries
+    # Buildings - polygon boundaries (large table, explicit bounds)
     stavebniobjekty:
       schema: public
       table: stavebniobjekty
       srid: 5514
       geometry_column: originalnihranice
+      geometry_type: MULTIPOLYGON
       id_column: ogc_fid
+      bounds: [12.09, 48.55, 18.86, 51.06]
       properties:
         kod: int4
         cislodomovni: _int4
@@ -51,13 +62,16 @@ postgres:
         pocetbytu: int4
         zastavenaplocha: int4
 
-    # Parcels - polygon boundaries
+    # Parcels - polygon boundaries (large table, explicit bounds to avoid timeout)
     parcely:
       schema: public
       table: parcely
       srid: 5514
       geometry_column: originalnihranice
+      geometry_type: POLYGON
       id_column: ogc_fid
+      # Czech Republic bounding box in WGS84 to skip slow bounds calculation
+      bounds: [12.09, 48.55, 18.86, 51.06]
       properties:
         id: int8
         kmenovecislo: int4
@@ -71,6 +85,7 @@ postgres:
       table: ulice
       srid: 5514
       geometry_column: geom
+      geometry_type: MULTILINESTRING
       id_column: ogc_fid
       properties:
         kod: int4
@@ -83,6 +98,7 @@ postgres:
       table: obce
       srid: 5514
       geometry_column: originalnihranice
+      geometry_type: MULTIPOLYGON
       id_column: ogc_fid
       properties:
         kod: int4
@@ -96,6 +112,7 @@ postgres:
       table: castiobci
       srid: 5514
       geometry_column: geom
+      geometry_type: POINT
       id_column: ogc_fid
       properties:
         kod: int4
@@ -108,6 +125,7 @@ postgres:
       table: katastralniuzemi
       srid: 5514
       geometry_column: originalnihranice
+      geometry_type: MULTIPOLYGON
       id_column: ogc_fid
       properties:
         kod: int4
@@ -120,6 +138,7 @@ postgres:
       table: zsj
       srid: 5514
       geometry_column: originalnihranice
+      geometry_type: MULTIPOLYGON
       id_column: ogc_fid
       properties:
         kod: int4
@@ -132,6 +151,7 @@ postgres:
       table: okresy
       srid: 5514
       geometry_column: generalizovanehranice
+      geometry_type: MULTIPOLYGON
       id_column: ogc_fid
       properties:
         kod: int4
@@ -146,6 +166,7 @@ postgres:
       table: kraje
       srid: 5514
       geometry_column: generalizovanehranice
+      geometry_type: MULTIPOLYGON
       id_column: ogc_fid
       properties:
         kod: int4
@@ -159,6 +180,7 @@ postgres:
       table: vusc
       srid: 5514
       geometry_column: generalizovanehranice
+      geometry_type: MULTIPOLYGON
       id_column: ogc_fid
       properties:
         kod: int4
@@ -172,6 +194,7 @@ postgres:
       table: orp
       srid: 5514
       geometry_column: generalizovanehranice
+      geometry_type: MULTIPOLYGON
       id_column: ogc_fid
       properties:
         kod: int4
@@ -185,6 +208,7 @@ postgres:
       table: pou
       srid: 5514
       geometry_column: generalizovanehranice
+      geometry_type: MULTIPOLYGON
       id_column: ogc_fid
       properties:
         kod: int4
@@ -197,6 +221,7 @@ postgres:
       table: regionysoudrznosti
       srid: 5514
       geometry_column: generalizovanehranice
+      geometry_type: MULTIPOLYGON
       id_column: ogc_fid
       properties:
         kod: int4
@@ -219,3 +244,8 @@ postgres:
     addresses_with_documents:
       schema: public
       function: addresses_with_documents
+
+    # Buildings with document references
+    buildings_with_documents:
+      schema: public
+      function: buildings_with_documents

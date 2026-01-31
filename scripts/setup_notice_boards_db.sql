@@ -405,7 +405,7 @@ RETURNS bytea AS $$
 $$ LANGUAGE SQL STABLE PARALLEL SAFE;
 
 COMMENT ON FUNCTION parcels_with_documents(integer, integer, integer) IS
-    'Martin tile server function: parcels with document references';
+    '{"description": "Parcels referenced in notice board documents", "name": "parcels_with_documents"}';
 
 -- Function: Streets with document references
 CREATE OR REPLACE FUNCTION streets_with_documents(z integer, x integer, y integer)
@@ -438,7 +438,7 @@ RETURNS bytea AS $$
 $$ LANGUAGE SQL STABLE PARALLEL SAFE;
 
 COMMENT ON FUNCTION streets_with_documents(integer, integer, integer) IS
-    'Martin tile server function: streets with document references';
+    '{"description": "Streets referenced in notice board documents", "name": "streets_with_documents"}';
 
 -- Function: Addresses with document references
 CREATE OR REPLACE FUNCTION addresses_with_documents(z integer, x integer, y integer)
@@ -472,7 +472,7 @@ RETURNS bytea AS $$
 $$ LANGUAGE SQL STABLE PARALLEL SAFE;
 
 COMMENT ON FUNCTION addresses_with_documents(integer, integer, integer) IS
-    'Martin tile server function: addresses with document references';
+    '{"description": "Addresses referenced in notice board documents", "name": "addresses_with_documents"}';
 
 COMMIT;
 

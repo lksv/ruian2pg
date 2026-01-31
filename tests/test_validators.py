@@ -12,6 +12,7 @@ import pytest
 
 from notice_boards.validators import (
     AddressValidationResult,
+    BuildingValidationResult,
     ParcelValidationResult,
     RuianValidator,
     StreetValidationResult,
@@ -134,6 +135,34 @@ class TestStreetValidationResult:
         )
         assert result.is_valid
         assert result.street_code == 12345
+
+
+class TestBuildingValidationResult:
+    """Tests for BuildingValidationResult dataclass."""
+
+    def test_valid_result(self) -> None:
+        """Test creating a valid result."""
+        result = BuildingValidationResult(
+            is_valid=True,
+            building_code=12345678,
+            municipality_code=582786,
+            municipality_name="Brno",
+            part_of_municipality_name="Veveří",
+            house_number=67,
+        )
+        assert result.is_valid
+        assert result.building_code == 12345678
+        assert result.house_number == 67
+
+    def test_invalid_result(self) -> None:
+        """Test creating an invalid result."""
+        result = BuildingValidationResult(
+            is_valid=False,
+            error="Building not found",
+        )
+        assert not result.is_valid
+        assert result.building_code is None
+        assert result.error == "Building not found"
 
 
 class TestRuianValidatorMocked:
@@ -293,6 +322,73 @@ class TestRuianValidatorMocked:
 
         assert result is False
 
+    def test_validate_building_missing_identifiers(self, mock_connection: tuple) -> None:
+        """Test building validation fails without building_code or house_number."""
+        conn, _ = mock_connection
+        validator = RuianValidator(conn)
+
+        result = validator.validate_building(
+            municipality_name="Brno",
+        )
+
+        assert not result.is_valid
+        assert result.error is not None
+        assert "building_code" in result.error.lower() or "house_number" in result.error.lower()
+
+    def test_validate_building_by_code(self, mock_connection: tuple) -> None:
+        """Test building validation by building code."""
+        conn, cursor = mock_connection
+        cursor.fetchone.return_value = (12345678, 582786, "Brno", "Veveří", 67)
+        validator = RuianValidator(conn)
+
+        result = validator.validate_building(building_code=12345678)
+
+        assert result.is_valid
+        assert result.building_code == 12345678
+        assert result.municipality_code == 582786
+        assert result.municipality_name == "Brno"
+        assert result.part_of_municipality_name == "Veveří"
+        assert result.house_number == 67
+
+    def test_validate_building_by_house_number(self, mock_connection: tuple) -> None:
+        """Test building validation by house number and municipality."""
+        conn, cursor = mock_connection
+        cursor.fetchone.return_value = (12345678, 582786, "Brno", "Veveří", 67)
+        validator = RuianValidator(conn)
+
+        result = validator.validate_building(
+            municipality_name="Brno",
+            house_number=67,
+        )
+
+        assert result.is_valid
+        assert result.building_code == 12345678
+        assert result.house_number == 67
+
+    def test_validate_building_not_found(self, mock_connection: tuple) -> None:
+        """Test building validation when building doesn't exist."""
+        conn, cursor = mock_connection
+        cursor.fetchone.return_value = None
+        validator = RuianValidator(conn)
+
+        result = validator.validate_building(building_code=999999999)
+
+        assert not result.is_valid
+        assert result.error is not None
+        assert "not found" in result.error.lower()
+
+    def test_validate_building_database_error(self, mock_connection: tuple) -> None:
+        """Test building validation handles database errors."""
+        conn, cursor = mock_connection
+        cursor.execute.side_effect = Exception("Connection lost")
+        validator = RuianValidator(conn)
+
+        result = validator.validate_building(building_code=12345678)
+
+        assert not result.is_valid
+        assert result.error is not None
+        assert "database error" in result.error.lower()
+
     def test_find_cadastral_area_by_code(self, mock_connection: tuple) -> None:
         """Test finding cadastral area by code."""
         conn, cursor = mock_connection
@@ -393,4 +489,30 @@ class TestRuianValidatorIntegration:
             cadastral_area_code=999999,
             parcel_number=999999999,
         )
+        assert not result.is_valid
+
+    def test_find_any_building(self, validator: RuianValidator) -> None:
+        """Test that we can find at least one building."""
+        # Query for any building with municipality
+        with validator.db.cursor() as cur:
+            cur.execute(
+                """
+                SELECT so.kod, so.cislodomovni[1], o.nazev
+                FROM stavebniobjekty so
+                JOIN castiobci co ON co.kod = so.castobcekod
+                JOIN obce o ON o.kod = co.obeckod
+                WHERE so.cislodomovni IS NOT NULL
+                LIMIT 1
+                """
+            )
+            row = cur.fetchone()
+
+        if row:
+            result = validator.validate_building(building_code=row[0])
+            assert result.is_valid
+            assert result.building_code == row[0]
+
+    def test_validate_nonexistent_building(self, validator: RuianValidator) -> None:
+        """Test validating a building that definitely doesn't exist."""
+        result = validator.validate_building(building_code=999999999)
         assert not result.is_valid
