@@ -62,6 +62,18 @@ uv run python scripts/import_ruian.py --latest
 
 # Import all municipalities
 uv run python scripts/import_ruian.py --municipalities
+
+# Fetch notice board list (Česko.Digital + NKOD OFN)
+uv run python scripts/fetch_notice_boards.py -o data/notice_boards.json
+
+# Fetch notice boards (quick, skip OFN)
+uv run python scripts/fetch_notice_boards.py --skip-ofn -o data/notice_boards.json
+
+# Import notice boards to database
+uv run python scripts/import_notice_boards.py data/notice_boards.json
+
+# Show notice board statistics
+uv run python scripts/import_notice_boards.py --stats
 ```
 
 ## Architecture
@@ -85,16 +97,20 @@ src/notice_boards/
     └── base.py        # NoticeBoardScraper ABC (stub for future)
 
 scripts/
-├── download_ruian.py         # CLI for downloading RUIAN
-├── import_ruian.py           # CLI for importing RUIAN
-└── setup_notice_boards_db.sql # DB migration for notice boards
+├── download_ruian.py           # CLI for downloading RUIAN
+├── import_ruian.py             # CLI for importing RUIAN
+├── fetch_notice_boards.py      # Fetch notice boards from APIs (Česko.Digital, NKOD)
+├── import_notice_boards.py     # Import notice boards JSON to database
+├── setup_notice_boards_db.sql  # DB migration for notice boards
+└── migrate_notice_boards_v2.sql # Migration v2: adds nutslau, coat_of_arms_url
 
 tests/
-├── test_config.py      # Tests for RUIAN configuration
-├── test_downloader.py  # Tests for RUIAN downloader
-├── test_importer.py    # Tests for RUIAN importer
-├── test_storage.py     # Tests for notice_boards storage
-└── test_validators.py  # Tests for notice_boards validators
+├── test_config.py              # Tests for RUIAN configuration
+├── test_downloader.py          # Tests for RUIAN downloader
+├── test_importer.py            # Tests for RUIAN importer
+├── test_notice_board_scripts.py # Tests for notice board fetch/import scripts
+├── test_storage.py             # Tests for notice_boards storage
+└── test_validators.py          # Tests for notice_boards validators
 ```
 
 **Data flow:** CUZK API → `RuianDownloader` → `data/*.xml.zip` → `RuianImporter` (ogr2ogr) → PostGIS
@@ -185,8 +201,9 @@ System for downloading documents from official notice boards of municipalities, 
 ### Database Schema
 
 ```bash
-# Apply migration
+# Apply migrations
 psql -U ruian -d ruian -f scripts/setup_notice_boards_db.sql
+psql -U ruian -d ruian -f scripts/migrate_notice_boards_v2.sql
 ```
 
 Tables created:
@@ -254,5 +271,7 @@ storage.save("2024/01/doc123/file.pdf", pdf_bytes)
 - ✅ RuianValidator (parcel, address, street validation)
 - ✅ TextExtractor + PDF extractors
 - ✅ Martin function sources for map
+- ✅ Notice board list fetcher (Česko.Digital + NKOD OFN APIs)
+- ✅ Notice board importer (JSON → PostgreSQL)
 - ⏳ Reference extractors (stub - will use LLM)
 - ⏳ Scrapers (stub - not implemented yet)

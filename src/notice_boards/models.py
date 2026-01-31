@@ -35,6 +35,8 @@ class NoticeBoard:
     legal_form_code: int | None = None
     legal_form_label: str | None = None
     board_type: str | None = None
+    nutslau: str | None = None
+    coat_of_arms_url: str | None = None
     is_active: bool = True
     last_scraped_at: datetime | None = None
     scrape_interval_hours: int = 24

@@ -427,8 +427,53 @@ The project includes a module for downloading and processing documents from offi
 ### Setup Notice Board Database
 
 ```bash
-# Apply database migration
+# Apply database migrations
 psql -U ruian -d ruian -f scripts/setup_notice_boards_db.sql
+psql -U ruian -d ruian -f scripts/migrate_notice_boards_v2.sql
+```
+
+### Fetch Notice Board List
+
+Download list of all Czech municipalities with their official notice board URLs from multiple sources:
+
+```bash
+# Fetch all data (Česko.Digital + NKOD OFN) - takes ~1 minute
+uv run python scripts/fetch_notice_boards.py -o data/notice_boards.json
+
+# Quick fetch (skip OFN, faster)
+uv run python scripts/fetch_notice_boards.py --skip-ofn -o data/notice_boards.json
+
+# Verbose output
+uv run python scripts/fetch_notice_boards.py -o data/notice_boards.json -v
+```
+
+Data sources:
+- **Česko.Digital API** - comprehensive municipality data (~6,300 entries)
+- **NKOD GraphQL API** - official OFN (Open Formal Norm) datasets with direct URLs to notice boards
+
+### Import Notice Boards to Database
+
+```bash
+# Import from JSON file
+uv run python scripts/import_notice_boards.py data/notice_boards.json
+
+# Show database statistics
+uv run python scripts/import_notice_boards.py --stats
+```
+
+Example statistics output:
+```
+Notice Board Statistics:
+  Total:              6,396
+  With official URL:  226
+  With OFN JSON URL:  228
+  With eDesky URL:    6,063
+  With RUIAN ref:     6,251
+
+By type:
+  obec                 6,390
+  kraj                 4
+  mesto                2
 ```
 
 This creates tables for:
