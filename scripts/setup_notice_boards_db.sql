@@ -373,6 +373,7 @@ COMMENT ON COLUMN lv_refs.lv_number IS 'Ownership sheet number (číslo listu vl
 -- =============================================================================
 
 -- Function: Parcels with document references
+-- Note: RUIAN data is in EPSG:5514, ST_TileEnvelope returns EPSG:3857
 CREATE OR REPLACE FUNCTION parcels_with_documents(z integer, x integer, y integer)
 RETURNS bytea AS $$
     SELECT ST_AsMVT(tile, 'parcels_with_documents', 4096, 'geom')
@@ -380,7 +381,7 @@ RETURNS bytea AS $$
         SELECT DISTINCT ON (p.id)
             p.id,
             ST_AsMVTGeom(
-                p.originalnihranice,
+                ST_Transform(p.originalnihranice, 3857),
                 ST_TileEnvelope(z, x, y),
                 4096, 256, true
             ) AS geom,
@@ -397,7 +398,7 @@ RETURNS bytea AS $$
         JOIN documents d ON d.id = a.document_id
         LEFT JOIN document_types dt ON dt.id = d.document_type_id
         LEFT JOIN ref_types rt ON rt.id = pr.ref_type_id
-        WHERE p.originalnihranice && ST_TileEnvelope(z, x, y)
+        WHERE ST_Transform(p.originalnihranice, 3857) && ST_TileEnvelope(z, x, y)
         ORDER BY p.id, d.published_at DESC
     ) AS tile
     WHERE geom IS NOT NULL
@@ -414,7 +415,7 @@ RETURNS bytea AS $$
         SELECT DISTINCT ON (u.kod)
             u.kod AS id,
             ST_AsMVTGeom(
-                u.geom,
+                ST_Transform(u.geom, 3857),
                 ST_TileEnvelope(z, x, y),
                 4096, 256, true
             ) AS geom,
@@ -430,7 +431,7 @@ RETURNS bytea AS $$
         JOIN documents d ON d.id = a.document_id
         LEFT JOIN document_types dt ON dt.id = d.document_type_id
         LEFT JOIN ref_types rt ON rt.id = sr.ref_type_id
-        WHERE u.geom && ST_TileEnvelope(z, x, y)
+        WHERE ST_Transform(u.geom, 3857) && ST_TileEnvelope(z, x, y)
         ORDER BY u.kod, d.published_at DESC
     ) AS tile
     WHERE geom IS NOT NULL
@@ -447,7 +448,7 @@ RETURNS bytea AS $$
         SELECT DISTINCT ON (am.kod)
             am.kod AS id,
             ST_AsMVTGeom(
-                am.geom,
+                ST_Transform(am.geom, 3857),
                 ST_TileEnvelope(z, x, y),
                 4096, 256, true
             ) AS geom,
@@ -464,7 +465,7 @@ RETURNS bytea AS $$
         JOIN documents d ON d.id = a.document_id
         LEFT JOIN document_types dt ON dt.id = d.document_type_id
         LEFT JOIN ref_types rt ON rt.id = ar.ref_type_id
-        WHERE am.geom && ST_TileEnvelope(z, x, y)
+        WHERE ST_Transform(am.geom, 3857) && ST_TileEnvelope(z, x, y)
         ORDER BY am.kod, d.published_at DESC
     ) AS tile
     WHERE geom IS NOT NULL

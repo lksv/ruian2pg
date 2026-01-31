@@ -184,6 +184,26 @@
             <span class="layer-color" style="background: transparent; border-color: #1abc9c;"></span>
             Districts
         </label>
+
+        <h3 style="margin-top: 12px;">Document References</h3>
+
+        <label>
+            <input type="checkbox" id="toggle-parcels_with_documents" checked>
+            <span class="layer-color" style="background: rgba(255, 0, 0, 0.4); border-color: #ff0000;"></span>
+            Parcels with Docs
+        </label>
+
+        <label>
+            <input type="checkbox" id="toggle-addresses_with_documents" checked>
+            <span class="layer-color" style="background: #ff00ff;"></span>
+            Addresses with Docs
+        </label>
+
+        <label>
+            <input type="checkbox" id="toggle-streets_with_documents" checked>
+            <span class="layer-color" style="background: #ff6600;"></span>
+            Streets with Docs
+        </label>
     </div>
 
     <script>
@@ -274,6 +294,42 @@
                     'line-color': '#1abc9c',
                     'line-width': 2
                 }
+            },
+            // Document reference layers
+            parcels_with_documents: {
+                type: 'fill',
+                minzoom: 14,
+                paint: {
+                    'fill-color': '#ff0000',
+                    'fill-opacity': 0.4,
+                    'fill-outline-color': '#cc0000'
+                }
+            },
+            addresses_with_documents: {
+                type: 'circle',
+                minzoom: 13,
+                paint: {
+                    'circle-radius': [
+                        'interpolate', ['linear'], ['zoom'],
+                        13, 4,
+                        18, 10
+                    ],
+                    'circle-color': '#ff00ff',
+                    'circle-stroke-color': '#cc00cc',
+                    'circle-stroke-width': 2
+                }
+            },
+            streets_with_documents: {
+                type: 'line',
+                minzoom: 12,
+                paint: {
+                    'line-color': '#ff6600',
+                    'line-width': [
+                        'interpolate', ['linear'], ['zoom'],
+                        12, 3,
+                        16, 6
+                    ]
+                }
             }
         };
 
@@ -292,7 +348,18 @@
             kmenovecislo: 'Parcel number',
             pododdelenicisla: 'Sub-number',
             obeckod: 'Municipality code',
-            okreskod: 'District code'
+            okreskod: 'District code',
+            // Document reference properties
+            parcel_number: 'Parcel number',
+            parcel_sub_number: 'Sub-number',
+            house_number: 'House number',
+            orientation_number: 'Orientation number',
+            street_name: 'Street name',
+            document_id: 'Document ID',
+            document_title: 'Document title',
+            document_type: 'Document type',
+            ref_type: 'Reference type',
+            confidence: 'Confidence'
         };
 
         // Layer display names for popups
@@ -303,7 +370,10 @@
             ulice: 'Street',
             obce: 'Municipality',
             katastralniuzemi: 'Cadastral Area',
-            okresy: 'District'
+            okresy: 'District',
+            parcels_with_documents: 'Parcel with Document',
+            addresses_with_documents: 'Address with Document',
+            streets_with_documents: 'Street with Document'
         };
 
         // Initialize map
@@ -395,7 +465,7 @@
             document.getElementById('loading').classList.add('hidden');
 
             // Add layers in order (bottom to top)
-            const layerOrder = ['okresy', 'obce', 'katastralniuzemi', 'parcely', 'ulice', 'stavebniobjekty', 'adresnimista'];
+            const layerOrder = ['okresy', 'obce', 'katastralniuzemi', 'parcely', 'ulice', 'stavebniobjekty', 'adresnimista', 'parcels_with_documents', 'streets_with_documents', 'addresses_with_documents'];
 
             for (const layerId of layerOrder) {
                 const layerConfig = LAYERS[layerId];

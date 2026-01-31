@@ -202,3 +202,20 @@ postgres:
         kod: int4
         nazev: varchar
         nutslau: varchar
+
+  # Function sources for document references
+  functions:
+    # Parcels with document references
+    parcels_with_documents:
+      schema: public
+      function: parcels_with_documents
+
+    # Streets with document references
+    streets_with_documents:
+      schema: public
+      function: streets_with_documents
+
+    # Addresses with document references
+    addresses_with_documents:
+      schema: public
+      function: addresses_with_documents

@@ -74,6 +74,15 @@ uv run python scripts/import_notice_boards.py data/notice_boards.json
 
 # Show notice board statistics
 uv run python scripts/import_notice_boards.py --stats
+
+# Generate test data for map rendering validation
+uv run python scripts/generate_test_references.py --cadastral-name "Veveří"
+
+# Generate with custom counts
+uv run python scripts/generate_test_references.py --cadastral-code 610186 --parcels 20 --addresses 15 --streets 5
+
+# Cleanup test data
+uv run python scripts/generate_test_references.py --cleanup
 ```
 
 ## Architecture
@@ -97,11 +106,12 @@ src/notice_boards/
     └── base.py        # NoticeBoardScraper ABC (stub for future)
 
 scripts/
-├── download_ruian.py           # CLI for downloading RUIAN
-├── import_ruian.py             # CLI for importing RUIAN
-├── fetch_notice_boards.py      # Fetch notice boards from APIs (Česko.Digital, NKOD)
-├── import_notice_boards.py     # Import notice boards JSON to database
-├── setup_notice_boards_db.sql  # DB migration for notice boards
+├── download_ruian.py            # CLI for downloading RUIAN
+├── import_ruian.py              # CLI for importing RUIAN
+├── fetch_notice_boards.py       # Fetch notice boards from APIs (Česko.Digital, NKOD)
+├── import_notice_boards.py      # Import notice boards JSON to database
+├── generate_test_references.py  # Generate test data for map rendering validation
+├── setup_notice_boards_db.sql   # DB migration for notice boards
 └── migrate_notice_boards_v2.sql # Migration v2: adds nutslau, coat_of_arms_url
 
 tests/
@@ -187,12 +197,20 @@ podman restart martin
 
 The `martin/martin.yaml` configures which tables and geometry columns to serve:
 
+**RUIAN base layers:**
 - `adresnimista` - address points (`geom`)
 - `stavebniobjekty` - buildings (`originalnihranice`)
 - `parcely` - parcels (`originalnihranice`)
 - `ulice` - streets (`geom`)
 - `obce` - municipalities (`originalnihranice`)
 - `okresy` - districts (`generalizovanehranice`)
+
+**Document reference layers** (function sources):
+- `parcels_with_documents` - parcels referenced in notice board documents (red)
+- `addresses_with_documents` - addresses referenced in documents (magenta)
+- `streets_with_documents` - streets referenced in documents (orange)
+
+Note: Document reference layers require PostGIS 3.5+ for correct rendering. The functions transform EPSG:5514 to EPSG:3857 for tile generation.
 
 ## Notice Board Documents
 
@@ -270,8 +288,10 @@ storage.save("2024/01/doc123/file.pdf", pdf_bytes)
 - ✅ StorageBackend + FilesystemStorage
 - ✅ RuianValidator (parcel, address, street validation)
 - ✅ TextExtractor + PDF extractors
-- ✅ Martin function sources for map
+- ✅ Martin function sources for map (with SRID transformation)
 - ✅ Notice board list fetcher (Česko.Digital + NKOD OFN APIs)
 - ✅ Notice board importer (JSON → PostgreSQL)
+- ✅ Test data generator (`generate_test_references.py`)
+- ✅ Web map with document reference layers
 - ⏳ Reference extractors (stub - will use LLM)
 - ⏳ Scrapers (stub - not implemented yet)
