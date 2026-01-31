@@ -79,24 +79,28 @@ class RuianImporter:
             True if connection successful, False otherwise.
         """
         try:
-            with psycopg2.connect(self.db_config.connection_string) as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT PostGIS_Version();")
-                    row = cur.fetchone()
-                    version = row[0] if row else "unknown"
-                    logger.info("Connected to PostGIS version: %s", version)
-                    return True
+            with (
+                psycopg2.connect(self.db_config.connection_string) as conn,
+                conn.cursor() as cur,
+            ):
+                cur.execute("SELECT PostGIS_Version();")
+                row = cur.fetchone()
+                version = row[0] if row else "unknown"
+                logger.info("Connected to PostGIS version: %s", version)
+                return True
         except psycopg2.Error as e:
             logger.error("Database connection failed: %s", e)
             return False
 
     def ensure_extensions(self) -> None:
         """Ensure required PostGIS extensions are installed."""
-        with psycopg2.connect(self.db_config.connection_string) as conn:
-            with conn.cursor() as cur:
-                cur.execute("CREATE EXTENSION IF NOT EXISTS postgis;")
-                cur.execute("CREATE EXTENSION IF NOT EXISTS postgis_topology;")
-                conn.commit()
+        with (
+            psycopg2.connect(self.db_config.connection_string) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute("CREATE EXTENSION IF NOT EXISTS postgis;")
+            cur.execute("CREATE EXTENSION IF NOT EXISTS postgis_topology;")
+            conn.commit()
         logger.info("PostGIS extensions ensured")
 
     def import_file(
@@ -231,27 +235,29 @@ class RuianImporter:
         """
         stats = {}
 
-        with psycopg2.connect(self.db_config.connection_string) as conn:
-            with conn.cursor() as cur:
-                # Get list of tables
-                cur.execute("""
-                    SELECT table_name
-                    FROM information_schema.tables
-                    WHERE table_schema = 'public'
-                    AND table_type = 'BASE TABLE'
-                    ORDER BY table_name;
-                """)
-                tables = [row[0] for row in cur.fetchall()]
+        with (
+            psycopg2.connect(self.db_config.connection_string) as conn,
+            conn.cursor() as cur,
+        ):
+            # Get list of tables
+            cur.execute("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                AND table_type = 'BASE TABLE'
+                ORDER BY table_name;
+            """)
+            tables = [row[0] for row in cur.fetchall()]
 
-                for table in tables:
-                    try:
-                        cur.execute(f'SELECT COUNT(*) FROM "{table}";')
-                        row = cur.fetchone()
-                        count = row[0] if row else 0
-                        stats[table] = count
-                    except psycopg2.Error as e:
-                        logger.warning("Could not count rows in %s: %s", table, e)
-                        conn.rollback()
+            for table in tables:
+                try:
+                    cur.execute(f'SELECT COUNT(*) FROM "{table}";')
+                    row = cur.fetchone()
+                    count = row[0] if row else 0
+                    stats[table] = count
+                except psycopg2.Error as e:
+                    logger.warning("Could not count rows in %s: %s", table, e)
+                    conn.rollback()
 
         return stats
 
@@ -303,23 +309,25 @@ class RuianImporter:
         """
         imported: set[str] = set()
         try:
-            with psycopg2.connect(self.db_config.connection_string) as conn:
-                with conn.cursor() as cur:
-                    # Check if tracking table exists
-                    cur.execute("""
-                        SELECT EXISTS (
-                            SELECT FROM information_schema.tables
-                            WHERE table_schema = 'public'
-                            AND table_name = 'ruian_import_log'
-                        );
-                    """)
-                    row = cur.fetchone()
-                    if not row or not row[0]:
-                        return imported
+            with (
+                psycopg2.connect(self.db_config.connection_string) as conn,
+                conn.cursor() as cur,
+            ):
+                # Check if tracking table exists
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables
+                        WHERE table_schema = 'public'
+                        AND table_name = 'ruian_import_log'
+                    );
+                """)
+                row = cur.fetchone()
+                if not row or not row[0]:
+                    return imported
 
-                    cur.execute("SELECT filename FROM ruian_import_log WHERE status = 'success';")
-                    for row in cur.fetchall():
-                        imported.add(row[0])
+                cur.execute("SELECT filename FROM ruian_import_log WHERE status = 'success';")
+                for row in cur.fetchall():
+                    imported.add(row[0])
         except psycopg2.Error as e:
             logger.warning("Could not read import log: %s", e)
 
@@ -327,35 +335,39 @@ class RuianImporter:
 
     def _ensure_import_log_table(self) -> None:
         """Create import log table if it doesn't exist."""
-        with psycopg2.connect(self.db_config.connection_string) as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS ruian_import_log (
-                        id SERIAL PRIMARY KEY,
-                        filename VARCHAR(255) NOT NULL UNIQUE,
-                        status VARCHAR(50) NOT NULL,
-                        imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        error_message TEXT
-                    );
-                """)
-                conn.commit()
+        with (
+            psycopg2.connect(self.db_config.connection_string) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS ruian_import_log (
+                    id SERIAL PRIMARY KEY,
+                    filename VARCHAR(255) NOT NULL UNIQUE,
+                    status VARCHAR(50) NOT NULL,
+                    imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    error_message TEXT
+                );
+            """)
+            conn.commit()
 
     def _log_import(self, filename: str, status: str, error_message: str | None = None) -> None:
         """Log import status for a file."""
-        with psycopg2.connect(self.db_config.connection_string) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO ruian_import_log (filename, status, error_message)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (filename) DO UPDATE
-                    SET status = EXCLUDED.status,
-                        imported_at = CURRENT_TIMESTAMP,
-                        error_message = EXCLUDED.error_message;
-                    """,
-                    (filename, status, error_message),
-                )
-                conn.commit()
+        with (
+            psycopg2.connect(self.db_config.connection_string) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute(
+                """
+                INSERT INTO ruian_import_log (filename, status, error_message)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (filename) DO UPDATE
+                SET status = EXCLUDED.status,
+                    imported_at = CURRENT_TIMESTAMP,
+                    error_message = EXCLUDED.error_message;
+                """,
+                (filename, status, error_message),
+            )
+            conn.commit()
 
     def import_all_municipalities(
         self,
@@ -594,24 +606,26 @@ class RuianImporter:
         """
         results = []
 
-        with psycopg2.connect(self.db_config.connection_string) as conn:
-            with conn.cursor() as cur:
-                try:
-                    cur.execute(
-                        f"""
-                        SELECT nazev, kod, ST_AsText(ST_Centroid(geom)) as centroid
-                        FROM "{table}"
-                        LIMIT %s;
-                    """,
-                        (limit,),
-                    )
+        with (
+            psycopg2.connect(self.db_config.connection_string) as conn,
+            conn.cursor() as cur,
+        ):
+            try:
+                cur.execute(
+                    f"""
+                    SELECT nazev, kod, ST_AsText(ST_Centroid(geom)) as centroid
+                    FROM "{table}"
+                    LIMIT %s;
+                """,
+                    (limit,),
+                )
 
-                    description = cur.description
-                    if description:
-                        columns = [desc[0] for desc in description]
-                        for row in cur.fetchall():
-                            results.append(dict(zip(columns, row)))
-                except psycopg2.Error as e:
-                    logger.error("Sample query failed: %s", e)
+                description = cur.description
+                if description:
+                    columns = [desc[0] for desc in description]
+                    for row in cur.fetchall():
+                        results.append(dict(zip(columns, row, strict=True)))
+            except psycopg2.Error as e:
+                logger.error("Sample query failed: %s", e)
 
         return results

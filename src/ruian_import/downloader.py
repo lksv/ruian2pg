@@ -78,27 +78,29 @@ class RuianDownloader:
 
         logger.info("Downloading %s...", filename)
 
-        with httpx.Client(timeout=self.config.timeout, follow_redirects=True) as client:
-            with client.stream("GET", url) as response:
-                response.raise_for_status()
+        with (
+            httpx.Client(timeout=self.config.timeout, follow_redirects=True) as client,
+            client.stream("GET", url) as response,
+        ):
+            response.raise_for_status()
 
-                # Download to temporary file first
-                temp_path = local_path.with_suffix(".tmp")
-                total_size = int(response.headers.get("content-length", 0))
-                downloaded = 0
+            # Download to temporary file first
+            temp_path = local_path.with_suffix(".tmp")
+            total_size = int(response.headers.get("content-length", 0))
+            downloaded = 0
 
-                with open(temp_path, "wb") as f:
-                    for chunk in response.iter_bytes(chunk_size=self.config.chunk_size):
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total_size:
-                            progress = (downloaded / total_size) * 100
-                            print(f"\r  Progress: {progress:.1f}%", end="", flush=True)
+            with open(temp_path, "wb") as f:
+                for chunk in response.iter_bytes(chunk_size=self.config.chunk_size):
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size:
+                        progress = (downloaded / total_size) * 100
+                        print(f"\r  Progress: {progress:.1f}%", end="", flush=True)
 
-                print()  # New line after progress
+            print()  # New line after progress
 
-                # Move to final location
-                temp_path.rename(local_path)
+            # Move to final location
+            temp_path.rename(local_path)
 
         logger.info("Downloaded %s (%d bytes)", filename, local_path.stat().st_size)
         return local_path

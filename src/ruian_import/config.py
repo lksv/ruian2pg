@@ -18,12 +18,18 @@ class DatabaseConfig:
     @property
     def connection_string(self) -> str:
         """Return psycopg2 connection string."""
-        return f"host={self.host} port={self.port} dbname={self.database} user={self.user} password={self.password}"
+        return (
+            f"host={self.host} port={self.port} dbname={self.database} "
+            f"user={self.user} password={self.password}"
+        )
 
     @property
     def ogr_connection_string(self) -> str:
         """Return OGR PostgreSQL connection string."""
-        return f"PG:host={self.host} port={self.port} dbname={self.database} user={self.user} password={self.password}"
+        return (
+            f"PG:host={self.host} port={self.port} dbname={self.database} "
+            f"user={self.user} password={self.password}"
+        )
 
 
 @dataclass

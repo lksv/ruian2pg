@@ -412,6 +412,83 @@ Data is downloaded from CUZK (Czech Office for Surveying, Mapping and Cadastre):
 
 There are approximately **6,258 OB files** (one per municipality).
 
+## Notice Board Documents
+
+The project includes a module for downloading and processing documents from official notice boards of Czech municipalities, parsing references to parcels, addresses, and streets, and displaying them on a map.
+
+### Features
+
+- Download documents from various notice board systems (GINIS, Vismo, eDesky, OFN)
+- Extract text from PDF documents
+- Parse references to RUIAN entities (parcels, addresses, streets)
+- Validate extracted references against RUIAN database
+- Display referenced parcels/streets on the web map
+
+### Setup Notice Board Database
+
+```bash
+# Apply database migration
+psql -U ruian -d ruian -f scripts/setup_notice_boards_db.sql
+```
+
+This creates tables for:
+- `notice_boards` - Notice board sources (municipalities)
+- `documents` - Downloaded documents
+- `attachments` - Document attachments (PDFs, etc.)
+- `parcel_refs`, `address_refs`, `street_refs` - Extracted references
+- Martin function sources for map visualization
+
+### Validate References
+
+```python
+from notice_boards.validators import RuianValidator
+from notice_boards.config import get_db_connection
+
+validator = RuianValidator(get_db_connection())
+
+# Validate parcel
+result = validator.validate_parcel(
+    cadastral_area_name="Veveří",
+    parcel_number=592,
+    parcel_sub_number=2
+)
+print(f"Parcel valid: {result.is_valid}, ID: {result.parcel_id}")
+
+# Validate address
+result = validator.validate_address(
+    municipality_name="Brno",
+    street_name="Kounicova",
+    house_number=67
+)
+print(f"Address valid: {result.is_valid}, Code: {result.address_point_code}")
+
+# Validate street
+result = validator.validate_street(
+    municipality_name="Brno",
+    street_name="Kounicova"
+)
+print(f"Street valid: {result.is_valid}, Code: {result.street_code}")
+```
+
+### Storage Backend
+
+```python
+from pathlib import Path
+from notice_boards.storage import FilesystemStorage
+
+storage = FilesystemStorage(Path("data/attachments"))
+
+# Save attachment
+storage.save("2024/01/doc123/file.pdf", pdf_content)
+
+# Load attachment
+content = storage.load("2024/01/doc123/file.pdf")
+
+# Check if exists
+if storage.exists("2024/01/doc123/file.pdf"):
+    print("File exists")
+```
+
 ## License
 
 Data from RUIAN is available under open license from CUZK.
