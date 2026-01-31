@@ -1,0 +1,349 @@
+# RUIAN Import to PostGIS
+
+Import Czech RUIAN (Registr územní identifikace, adres a nemovitostí) data to PostgreSQL/PostGIS.
+
+## Features
+
+- Download VFR (Výměnný formát RÚIAN) files from CUZK
+- Import to PostGIS using GDAL/ogr2ogr
+- Support for original boundaries (not generalized)
+- All administrative levels: State, Regions, Districts, Municipalities, etc.
+- **Full country import**: Download and import all 6,258 municipalities with detailed data
+- **Parallel downloads**: Configurable number of download workers
+- **Resume support**: Continue interrupted imports from where they stopped
+
+## Supported Platforms
+
+| Platform | Architecture | Status |
+|----------|--------------|--------|
+| macOS    | Intel (x86_64) | ✅ Supported |
+| macOS    | Apple Silicon (arm64) | ✅ Supported |
+| Linux    | amd64 (x86_64) | ✅ Supported |
+| Linux    | arm64 (aarch64) | ✅ Supported |
+
+Tested on:
+- macOS Sonoma (Intel & Apple Silicon)
+- Ubuntu 22.04/24.04 (amd64 & arm64)
+- Debian 12 (amd64 & arm64)
+- Hetzner Cloud (CAX - Ampere Altra arm64)
+- AWS EC2 (Graviton arm64)
+
+## Requirements
+
+- Python 3.11+
+- GDAL with VFR support (`ogr2ogr`)
+- PostgreSQL with PostGIS extension
+- Podman or Docker (optional, for database container)
+
+## Installation
+
+### 1. Install GDAL dependencies
+
+**macOS (Intel & Apple Silicon):**
+```bash
+brew install gdal
+```
+
+**Ubuntu/Debian (amd64 & arm64):**
+```bash
+sudo apt-get update
+sudo apt-get install gdal-bin python3-gdal
+```
+
+**Fedora/RHEL/Rocky (amd64 & arm64):**
+```bash
+sudo dnf install gdal
+```
+
+**Verify VFR support:**
+```bash
+ogrinfo --formats | grep VFK
+```
+
+### 2. Install Python package
+
+```bash
+# Using uv
+uv sync
+
+# Or using pip
+pip install -e .
+```
+
+### 3. Start PostGIS database
+
+**Using Docker/Podman (all platforms):**
+```bash
+# Create volume for data persistence
+podman volume create ruian_pgdata
+
+# Start PostGIS container
+podman run -d \
+  --name ruian-postgis \
+  -e POSTGRES_USER=ruian \
+  -e POSTGRES_PASSWORD=ruian \
+  -e POSTGRES_DB=ruian \
+  -p 5432:5432 \
+  -v ruian_pgdata:/var/lib/postgresql/data:Z \
+  docker.io/postgis/postgis:17-3.5
+
+# Initialize extensions
+podman exec -it ruian-postgis psql -U ruian -d ruian -c \
+  "CREATE EXTENSION IF NOT EXISTS postgis; CREATE EXTENSION IF NOT EXISTS postgis_topology;"
+```
+
+**Native PostgreSQL (Linux):**
+```bash
+# Ubuntu/Debian
+sudo apt-get install postgresql-16 postgresql-16-postgis-3
+
+# Create database
+sudo -u postgres createuser ruian
+sudo -u postgres createdb -O ruian ruian
+sudo -u postgres psql -d ruian -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+```
+
+## Development
+
+### Running Tests
+
+```bash
+# Run all tests
+uv run pytest tests/ -v
+
+# Run with coverage report
+uv run pytest tests/ -v --cov=src/ruian_import
+
+# Run specific test file
+uv run pytest tests/test_downloader.py -v
+```
+
+### Code Quality
+
+```bash
+# Lint
+uv run ruff check src/ scripts/ tests/
+
+# Format
+uv run ruff format src/ scripts/ tests/
+
+# Type check
+uv run mypy src/ruian_import/ scripts/
+```
+
+## Usage
+
+### Download RUIAN data
+
+```bash
+# List available files
+uv run python scripts/download_ruian.py --list
+
+# Download the latest file
+uv run python scripts/download_ruian.py --latest
+
+# Download all available files
+uv run python scripts/download_ruian.py --all
+
+# Show local files
+uv run python scripts/download_ruian.py --local
+
+# Download all municipalities (OB files) - full country data
+uv run python scripts/download_ruian.py --municipalities
+
+# Download with more parallel workers (default: 5)
+uv run python scripts/download_ruian.py --municipalities --workers 10
+
+# List available municipality files
+uv run python scripts/download_ruian.py --list-municipalities
+
+# Show local municipality files
+uv run python scripts/download_ruian.py --local-municipalities
+```
+
+### Import to PostGIS
+
+```bash
+# Check database connection
+uv run python scripts/import_ruian.py --check
+
+# Import the latest file
+uv run python scripts/import_ruian.py --latest
+
+# Import all files
+uv run python scripts/import_ruian.py --all
+
+# Import specific file
+uv run python scripts/import_ruian.py --file data/20251231_ST_UKSH.xml.zip
+
+# Verify import
+uv run python scripts/import_ruian.py --verify
+
+# Show table statistics
+uv run python scripts/import_ruian.py --stats
+
+# Sample query
+uv run python scripts/import_ruian.py --sample obec
+
+# Import all municipality (OB) files - full country data
+uv run python scripts/import_ruian.py --municipalities
+
+# Resume interrupted import (skip already imported files)
+uv run python scripts/import_ruian.py --municipalities --continue
+```
+
+### Database connection options
+
+You can configure database connection via environment variables or command-line arguments:
+
+```bash
+# Environment variables
+export RUIAN_DB_HOST=localhost
+export RUIAN_DB_PORT=5432
+export RUIAN_DB_NAME=ruian
+export RUIAN_DB_USER=ruian
+export RUIAN_DB_PASSWORD=ruian
+
+# Or command-line arguments
+uv run python scripts/import_ruian.py --host localhost --port 5432 --dbname ruian --user ruian --password ruian --check
+```
+
+## Data Structure
+
+After import, the following tables are created:
+
+| Table | Description | Geometry |
+|-------|-------------|----------|
+| `stat` | State (Czech Republic) | polygon |
+| `regionsoudrznosti` | Cohesion regions | polygon |
+| `vusc` | Regions (Kraje) | polygon |
+| `okres` | Districts | polygon |
+| `orp` | Municipalities with extended powers | polygon |
+| `pou` | Municipalities with authorized municipal office | polygon |
+| `obec` | Municipalities | polygon |
+| `spravniobvod` | Administrative districts | polygon |
+| `mop` | City districts/parts | polygon |
+| `momc` | City districts/city parts | polygon |
+| `castobce` | Parts of municipalities | polygon |
+| `katastralniuzemi` | Cadastral areas | polygon |
+| `zsj` | Basic settlement units | polygon |
+| `ulice` | Streets | linestring |
+| `stavebniobjekt` | Building objects | polygon |
+| `adresnimisto` | Address points | point |
+
+## Example Queries
+
+```sql
+-- Connect to database
+podman exec -it ruian-postgis psql -U ruian -d ruian
+
+-- Count addresses (should be ~3 million)
+SELECT COUNT(*) FROM adresnimisto;
+
+-- Find municipalities starting with "Prah"
+SELECT nazev, kod, ST_AsText(ST_Centroid(geom)) AS centroid
+FROM obec
+WHERE nazev LIKE 'Prah%';
+
+-- Find all streets in Prague
+SELECT u.nazev, o.nazev AS obec
+FROM ulice u
+JOIN obec o ON ST_Within(u.geom, o.geom)
+WHERE o.nazev = 'Praha'
+LIMIT 10;
+
+-- Get area of all municipalities in km²
+SELECT nazev, ST_Area(geom) / 1000000 AS area_km2
+FROM obec
+ORDER BY area_km2 DESC
+LIMIT 10;
+```
+
+## Full Country Import
+
+To import data for all Czech municipalities (detailed addresses, buildings, parcels):
+
+```bash
+# 1. Download state-level data (regions, districts)
+uv run python scripts/download_ruian.py --latest
+uv run python scripts/import_ruian.py --latest
+
+# 2. Download all municipality data (~15-25 GB)
+uv run python scripts/download_ruian.py --municipalities --workers 10
+
+# 3. Import all municipality data
+uv run python scripts/import_ruian.py --municipalities
+
+# If interrupted, resume from where it stopped:
+uv run python scripts/import_ruian.py --municipalities --continue
+```
+
+### Disk and Resource Requirements
+
+| Data Set | Downloaded Files | Database Size | Total Disk |
+|----------|-----------------|---------------|------------|
+| ST (state structure only) | ~50 MB | ~500 MB | ~1 GB |
+| Full country (ST + all OB) | ~15-25 GB | ~50-80 GB | **~100 GB** |
+
+**Recommendations for full country import:**
+- Minimum: 160 GB disk space
+- Recommended: 200 GB disk space (for safety margin)
+- 8+ GB RAM for PostgreSQL
+- SSD storage strongly recommended
+
+### Expected Table Counts (full import)
+
+```sql
+-- Verify import
+SELECT COUNT(*) FROM obce;            -- ~6,258 municipalities
+SELECT COUNT(*) FROM katastralniuzemi; -- ~13,000 cadastral areas
+SELECT COUNT(*) FROM adresnimista;     -- ~3,000,000 address points
+SELECT COUNT(*) FROM stavebniobjekty;  -- ~3,500,000 buildings
+SELECT COUNT(*) FROM parcely;          -- ~25,000,000 parcels
+```
+
+## Production Deployment
+
+### Recommended Server Configuration
+
+For full country import on a production server:
+
+**Hetzner Cloud (cost-effective):**
+- CAX21 (4 vCPU Ampere, 8 GB RAM, 160 GB disk): ~€8/month
+- CAX31 (8 vCPU Ampere, 16 GB RAM, 320 GB disk): ~€15/month
+
+**AWS/GCP/Azure:**
+- ARM64 instances (Graviton, Ampere) offer better price/performance
+- t4g.medium or larger on AWS
+- Minimum 200 GB EBS/disk
+
+### PostgreSQL Tuning
+
+For large imports, add to `postgresql.conf`:
+```
+shared_buffers = 2GB
+work_mem = 256MB
+maintenance_work_mem = 1GB
+effective_cache_size = 6GB
+checkpoint_completion_target = 0.9
+```
+
+## Data Source
+
+Data is downloaded from CUZK (Czech Office for Surveying, Mapping and Cadastre):
+- Configuration: https://vdp.cuzk.gov.cz/vdp/ruian/vymennyformat
+- File format: VFR (Výměnný formát RÚIAN) - XML in ZIP archive
+- Coordinate system: S-JTSK / Krovak East North (EPSG:5514)
+
+## Data Types
+
+| File Type | Description | Contents |
+|-----------|-------------|----------|
+| ST_UKSH | State structure | Regions, districts, ORP, POU (no detailed municipality data) |
+| OB_*_UKSH | Municipality files | Addresses, buildings, parcels, streets for each municipality |
+
+There are approximately **6,258 OB files** (one per municipality).
+
+## License
+
+Data from RUIAN is available under open license from CUZK.
