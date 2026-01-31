@@ -113,7 +113,8 @@ scripts/
 ├── generate_test_references.py  # Generate test data for map rendering validation
 ├── setup_notice_boards_db.sql   # DB migration for notice boards
 ├── migrate_notice_boards_v2.sql # Migration v2: adds nutslau, coat_of_arms_url
-└── migrate_notice_boards_v3.sql # Migration v3: adds building_refs table
+├── migrate_notice_boards_v3.sql # Migration v3: adds building_refs table
+└── migrate_notice_boards_v4.sql # Migration v4: optimizes tile functions for spatial index
 
 tests/
 ├── test_config.py              # Tests for RUIAN configuration
@@ -220,6 +221,20 @@ The `martin/martin.yaml` configures which tables and geometry columns to serve:
 
 Note: Recommended PostGIS 3.5+ for correct tile rendering. The functions transform EPSG:5514 to EPSG:3857 for tile generation.
 
+### Spatial Index Best Practices
+
+**IMPORTANT:** When writing PostGIS tile functions, always transform the tile envelope instead of the geometry column to enable spatial index usage:
+
+```sql
+-- ❌ WRONG: Bypasses GIST index (transforms ALL geometries)
+WHERE ST_Transform(p.geom, 3857) && ST_TileEnvelope(z, x, y)
+
+-- ✅ CORRECT: Uses GIST index (transforms only tile bbox)
+WHERE p.geom && ST_Transform(ST_TileEnvelope(z, x, y), 5514)
+```
+
+The wrong pattern causes sequential scan + transformation of millions of rows per tile request. The correct pattern transforms 1 bbox and uses the spatial index.
+
 ## Notice Board Documents
 
 System for downloading documents from official notice boards of municipalities, parsing references to parcels/addresses/streets and displaying them on a map.
@@ -231,6 +246,7 @@ System for downloading documents from official notice boards of municipalities, 
 psql -U ruian -d ruian -f scripts/setup_notice_boards_db.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v2.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v3.sql
+psql -U ruian -d ruian -f scripts/migrate_notice_boards_v4.sql
 ```
 
 Tables created:
