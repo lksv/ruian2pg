@@ -73,6 +73,14 @@
             border: 1px solid #ccc;
         }
 
+        /* Layer loading indicator via data attribute */
+        .layer-control label[data-loading="true"]::after {
+            content: "(Loading...)";
+            margin-left: auto;
+            font-size: 11px;
+            color: #888;
+        }
+
         /* Popup styling */
         .maplibregl-popup-content {
             padding: 12px;
@@ -125,12 +133,53 @@
         .loading.hidden {
             display: none;
         }
+
+        /* Tile loading indicator */
+        .tile-loading {
+            position: absolute;
+            bottom: 30px;
+            right: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 6px 10px;
+            border-radius: 6px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #555;
+        }
+
+        .tile-loading.hidden {
+            display: none;
+        }
+
+        .tile-spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid #e0e0e0;
+            border-top-color: #3498db;
+            border-radius: 50%;
+            animation: tile-spin 0.8s linear infinite;
+        }
+
+        @keyframes tile-spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
     </style>
 </head>
 <body>
     <div id="map"></div>
 
     <div class="loading" id="loading">Loading map...</div>
+
+    <div class="tile-loading hidden" id="tile-loading">
+        <div class="tile-spinner"></div>
+        <span>Loading tiles...</span>
+    </div>
 
     <div class="layer-control">
         <h3>Base Layer</h3>
@@ -143,43 +192,43 @@
 
         <h3 style="margin-top: 12px;">RUIAN Layers</h3>
 
-        <label>
+        <label data-layer="adresnimista">
             <input type="checkbox" id="toggle-adresnimista" checked>
             <span class="layer-color" style="background: #e74c3c;"></span>
             Address Points
         </label>
 
-        <label>
+        <label data-layer="stavebniobjekty">
             <input type="checkbox" id="toggle-stavebniobjekty" checked>
             <span class="layer-color" style="background: rgba(52, 152, 219, 0.5); border-color: #2980b9;"></span>
             Buildings
         </label>
 
-        <label>
+        <label data-layer="parcely">
             <input type="checkbox" id="toggle-parcely">
             <span class="layer-color" style="background: transparent; border-color: #27ae60;"></span>
             Parcels
         </label>
 
-        <label>
+        <label data-layer="ulice">
             <input type="checkbox" id="toggle-ulice" checked>
             <span class="layer-color" style="background: #7f8c8d;"></span>
             Streets
         </label>
 
-        <label>
+        <label data-layer="obce">
             <input type="checkbox" id="toggle-obce" checked>
             <span class="layer-color" style="background: transparent; border-color: #e67e22;"></span>
             Municipalities
         </label>
 
-        <label>
+        <label data-layer="katastralniuzemi">
             <input type="checkbox" id="toggle-katastralniuzemi">
             <span class="layer-color" style="background: transparent; border-color: #9b59b6;"></span>
             Cadastral Areas
         </label>
 
-        <label>
+        <label data-layer="okresy">
             <input type="checkbox" id="toggle-okresy">
             <span class="layer-color" style="background: transparent; border-color: #1abc9c;"></span>
             Districts
@@ -187,25 +236,25 @@
 
         <h3 style="margin-top: 12px;">Document References</h3>
 
-        <label>
+        <label data-layer="parcels_with_documents">
             <input type="checkbox" id="toggle-parcels_with_documents" checked>
             <span class="layer-color" style="background: rgba(255, 0, 0, 0.4); border-color: #ff0000;"></span>
             Parcels with Docs
         </label>
 
-        <label>
+        <label data-layer="addresses_with_documents">
             <input type="checkbox" id="toggle-addresses_with_documents" checked>
             <span class="layer-color" style="background: #ff00ff;"></span>
             Addresses with Docs
         </label>
 
-        <label>
+        <label data-layer="streets_with_documents">
             <input type="checkbox" id="toggle-streets_with_documents" checked>
             <span class="layer-color" style="background: #ff6600;"></span>
             Streets with Docs
         </label>
 
-        <label>
+        <label data-layer="buildings_with_documents">
             <input type="checkbox" id="toggle-buildings_with_documents" checked>
             <span class="layer-color" style="background: rgba(0, 200, 255, 0.5); border-color: #00a0cc;"></span>
             Buildings with Docs
@@ -213,6 +262,25 @@
     </div>
 
     <script>
+        // Global error handler for uncaught errors
+        window.onerror = function(message, source, lineno, colno, error) {
+            console.error('[Global] Uncaught error:', {
+                message,
+                source,
+                line: lineno,
+                column: colno,
+                error
+            });
+            return false; // Let default handler run too
+        };
+
+        // Handle unhandled promise rejections
+        window.addEventListener('unhandledrejection', (event) => {
+            console.error('[Global] Unhandled promise rejection:', event.reason);
+        });
+
+        console.log('[Init] RUIAN Map Viewer starting...');
+
         // Configuration - change TILE_SERVER_URL for production
         const CONFIG = {
             // For local development
@@ -348,6 +416,33 @@
             }
         };
 
+        // Layer shortcut mapping for URL (bidirectional)
+        const LAYER_SHORTCUTS = {
+            // Short code -> layer ID
+            'osm': 'osm-tiles',
+            'addr': 'adresnimista',
+            'bld': 'stavebniobjekty',
+            'par': 'parcely',
+            'str': 'ulice',
+            'mun': 'obce',
+            'cad': 'katastralniuzemi',
+            'dis': 'okresy',
+            'pdoc': 'parcels_with_documents',
+            'adoc': 'addresses_with_documents',
+            'sdoc': 'streets_with_documents',
+            'bdoc': 'buildings_with_documents'
+        };
+
+        // Reverse mapping: layer ID -> short code
+        const LAYER_TO_SHORTCUT = Object.fromEntries(
+            Object.entries(LAYER_SHORTCUTS).map(([k, v]) => [v, k])
+        );
+
+        // Default visible layers (used when no URL params)
+        const DEFAULT_VISIBLE_LAYERS = new Set([
+            'osm', 'addr', 'bld', 'str', 'mun', 'pdoc', 'adoc', 'sdoc', 'bdoc'
+        ]);
+
         // Property labels for popup display
         const PROPERTY_LABELS = {
             kod: 'Code',
@@ -377,6 +472,152 @@
             confidence: 'Confidence'
         };
 
+        // URL state management
+        let urlUpdateTimeout = null;
+        const URL_UPDATE_DEBOUNCE_MS = 300;
+
+        /**
+         * Parse URL hash state
+         * Format: #map={zoom}/{lat}/{lng}&layers={shortcode1},{shortcode2},...
+         * @returns {Object|null} Parsed state or null if invalid
+         */
+        function parseUrlState() {
+            const hash = window.location.hash;
+            if (!hash || !hash.startsWith('#map=')) return null;
+
+            const hashContent = hash.substring(1); // Remove '#'
+            const parts = hashContent.split('&');
+
+            const result = { zoom: null, lat: null, lng: null, layers: null };
+
+            for (const part of parts) {
+                if (part.startsWith('map=')) {
+                    const mapParts = part.substring(4).split('/');
+                    if (mapParts.length >= 3) {
+                        const zoom = parseFloat(mapParts[0]);
+                        const lat = parseFloat(mapParts[1]);
+                        const lng = parseFloat(mapParts[2]);
+
+                        // Validate coordinates
+                        if (!isNaN(zoom) && !isNaN(lat) && !isNaN(lng) &&
+                            zoom >= CONFIG.MIN_ZOOM && zoom <= CONFIG.MAX_ZOOM &&
+                            lat >= -90 && lat <= 90 &&
+                            lng >= -180 && lng <= 180) {
+                            result.zoom = zoom;
+                            result.lat = lat;
+                            result.lng = lng;
+                        } else {
+                            console.warn('[URL] Invalid map coordinates in hash:', {
+                                zoom, lat, lng,
+                                valid: {
+                                    zoom: !isNaN(zoom) && zoom >= CONFIG.MIN_ZOOM && zoom <= CONFIG.MAX_ZOOM,
+                                    lat: !isNaN(lat) && lat >= -90 && lat <= 90,
+                                    lng: !isNaN(lng) && lng >= -180 && lng <= 180
+                                }
+                            });
+                        }
+                    } else {
+                        console.warn('[URL] Invalid map format, expected zoom/lat/lng:', part);
+                    }
+                } else if (part.startsWith('layers=')) {
+                    const layerStr = part.substring(7);
+                    if (layerStr) {
+                        const allShortcuts = layerStr.split(',');
+                        const validShortcuts = allShortcuts.filter(s => s && LAYER_SHORTCUTS[s]);
+                        const invalidShortcuts = allShortcuts.filter(s => s && !LAYER_SHORTCUTS[s]);
+
+                        if (invalidShortcuts.length > 0) {
+                            console.warn('[URL] Unknown layer shortcuts ignored:', invalidShortcuts);
+                        }
+
+                        if (validShortcuts.length > 0) {
+                            result.layers = new Set(validShortcuts);
+                        }
+                    }
+                }
+            }
+
+            return (result.zoom !== null || result.layers !== null) ? result : null;
+        }
+
+        /**
+         * Get current visible layers as shortcut codes
+         * @returns {string[]} Array of shortcut codes for visible layers
+         */
+        function getVisibleLayers() {
+            const visible = [];
+
+            // Check OSM
+            const osmCheckbox = document.getElementById('toggle-osm');
+            if (osmCheckbox && osmCheckbox.checked) {
+                visible.push('osm');
+            }
+
+            // Check RUIAN layers
+            for (const layerId of Object.keys(LAYERS)) {
+                const checkbox = document.getElementById(`toggle-${layerId}`);
+                if (checkbox && checkbox.checked) {
+                    const shortcut = LAYER_TO_SHORTCUT[layerId];
+                    if (shortcut) visible.push(shortcut);
+                }
+            }
+
+            return visible;
+        }
+
+        /**
+         * Update URL hash with current map state
+         */
+        function updateUrlState() {
+            if (urlUpdateTimeout) {
+                clearTimeout(urlUpdateTimeout);
+            }
+
+            urlUpdateTimeout = setTimeout(() => {
+                const center = map.getCenter();
+                const zoom = map.getZoom();
+                const layers = getVisibleLayers();
+
+                // Format: #map=zoom/lat/lng&layers=layer1,layer2,...
+                const mapPart = `map=${zoom.toFixed(2)}/${center.lat.toFixed(4)}/${center.lng.toFixed(4)}`;
+                const layersPart = `layers=${layers.join(',')}`;
+
+                const newHash = `#${mapPart}&${layersPart}`;
+
+                // Use replaceState to avoid polluting browser history
+                if (window.location.hash !== newHash) {
+                    history.replaceState(null, '', newHash);
+                }
+            }, URL_UPDATE_DEBOUNCE_MS);
+        }
+
+        /**
+         * Apply layer visibility from URL state
+         * @param {Set<string>} visibleShortcuts Set of shortcut codes that should be visible
+         */
+        function applyLayerVisibility(visibleShortcuts) {
+            // Apply to OSM
+            const osmCheckbox = document.getElementById('toggle-osm');
+            if (osmCheckbox) {
+                const shouldBeVisible = visibleShortcuts.has('osm');
+                osmCheckbox.checked = shouldBeVisible;
+            } else {
+                console.warn('[Init] OSM checkbox not found during visibility apply');
+            }
+
+            // Apply to RUIAN layers
+            for (const layerId of Object.keys(LAYERS)) {
+                const checkbox = document.getElementById(`toggle-${layerId}`);
+                if (checkbox) {
+                    const shortcut = LAYER_TO_SHORTCUT[layerId];
+                    const shouldBeVisible = shortcut && visibleShortcuts.has(shortcut);
+                    checkbox.checked = shouldBeVisible;
+                } else {
+                    console.warn(`[Init] Checkbox not found for layer: ${layerId}`);
+                }
+            }
+        }
+
         // Layer display names for popups
         const LAYER_NAMES = {
             adresnimista: 'Address Point',
@@ -391,6 +632,28 @@
             streets_with_documents: 'Street with Document',
             buildings_with_documents: 'Building with Document'
         };
+
+        // Parse URL state before initializing map
+        const initialUrlState = parseUrlState();
+        const initialCenter = initialUrlState && initialUrlState.lat !== null
+            ? [initialUrlState.lng, initialUrlState.lat]
+            : CONFIG.CENTER;
+        const initialZoom = initialUrlState && initialUrlState.zoom !== null
+            ? initialUrlState.zoom
+            : CONFIG.ZOOM;
+        const initialLayers = initialUrlState && initialUrlState.layers !== null
+            ? initialUrlState.layers
+            : DEFAULT_VISIBLE_LAYERS;
+
+        console.log('[Init] URL state parsed:', {
+            fromUrl: initialUrlState !== null,
+            center: initialCenter,
+            zoom: initialZoom,
+            layers: Array.from(initialLayers)
+        });
+
+        // Apply initial layer visibility to checkboxes (before map loads)
+        applyLayerVisibility(initialLayers);
 
         // Initialize map
         const map = new maplibregl.Map({
@@ -413,12 +676,15 @@
                         type: 'raster',
                         source: 'osm',
                         minzoom: 0,
-                        maxzoom: 19
+                        maxzoom: 19,
+                        layout: {
+                            visibility: initialLayers.has('osm') ? 'visible' : 'none'
+                        }
                     }
                 ]
             },
-            center: CONFIG.CENTER,
-            zoom: CONFIG.ZOOM,
+            center: initialCenter,
+            zoom: initialZoom,
             minZoom: CONFIG.MIN_ZOOM,
             maxZoom: CONFIG.MAX_ZOOM
         });
@@ -478,6 +744,7 @@
 
         // Add RUIAN layers when map loads
         map.on('load', () => {
+            console.log('[Map] Map loaded successfully');
             document.getElementById('loading').classList.add('hidden');
 
             // Add layers in order (bottom to top)
@@ -486,46 +753,55 @@
             for (const layerId of layerOrder) {
                 const layerConfig = LAYERS[layerId];
 
-                // Add source for each layer (Martin serves each table separately)
-                map.addSource(layerId, {
-                    type: 'vector',
-                    tiles: [
-                        `${CONFIG.TILE_SERVER_URL}/${layerId}/{z}/{x}/{y}`
-                    ],
-                    minzoom: 6,
-                    maxzoom: 20
-                });
+                try {
+                    // Add source for each layer (Martin serves each table separately)
+                    map.addSource(layerId, {
+                        type: 'vector',
+                        tiles: [
+                            `${CONFIG.TILE_SERVER_URL}/${layerId}/{z}/{x}/{y}`
+                        ],
+                        minzoom: 6,
+                        maxzoom: 20
+                    });
 
-                // Create layer definition
-                const layerDef = {
-                    id: layerId,
-                    type: layerConfig.type,
-                    source: layerId,
-                    'source-layer': layerId,
-                    paint: layerConfig.paint
-                };
+                    // Determine initial visibility from checkbox state (already set from URL)
+                    const checkbox = document.getElementById(`toggle-${layerId}`);
+                    if (!checkbox) {
+                        console.warn(`[Layer] Checkbox not found for layer: ${layerId}`);
+                    }
+                    const isVisible = checkbox ? checkbox.checked : true;
 
-                if (layerConfig.minzoom) layerDef.minzoom = layerConfig.minzoom;
-                if (layerConfig.maxzoom) layerDef.maxzoom = layerConfig.maxzoom;
+                    // Create layer definition
+                    const layerDef = {
+                        id: layerId,
+                        type: layerConfig.type,
+                        source: layerId,
+                        'source-layer': layerId,
+                        paint: layerConfig.paint,
+                        layout: {
+                            visibility: isVisible ? 'visible' : 'none'
+                        }
+                    };
 
-                map.addLayer(layerDef);
+                    if (layerConfig.minzoom) layerDef.minzoom = layerConfig.minzoom;
+                    if (layerConfig.maxzoom) layerDef.maxzoom = layerConfig.maxzoom;
 
-                // Set initial visibility based on checkbox state
-                const checkbox = document.getElementById(`toggle-${layerId}`);
-                if (checkbox && !checkbox.checked) {
-                    map.setLayoutProperty(layerId, 'visibility', 'none');
+                    map.addLayer(layerDef);
+                    console.log(`[Layer] Added layer: ${layerId} (visible: ${isVisible})`);
+
+                    // Add click handler
+                    map.on('click', layerId, (e) => handleFeatureClick(e, layerId));
+
+                    // Change cursor on hover
+                    map.on('mouseenter', layerId, () => {
+                        map.getCanvas().style.cursor = 'pointer';
+                    });
+                    map.on('mouseleave', layerId, () => {
+                        map.getCanvas().style.cursor = '';
+                    });
+                } catch (err) {
+                    console.error(`[Layer] Failed to add layer ${layerId}:`, err);
                 }
-
-                // Add click handler
-                map.on('click', layerId, (e) => handleFeatureClick(e, layerId));
-
-                // Change cursor on hover
-                map.on('mouseenter', layerId, () => {
-                    map.getCanvas().style.cursor = 'pointer';
-                });
-                map.on('mouseleave', layerId, () => {
-                    map.getCanvas().style.cursor = '';
-                });
             }
 
             // Wire up layer toggle checkboxes
@@ -535,7 +811,11 @@
                     checkbox.addEventListener('change', (e) => {
                         const visibility = e.target.checked ? 'visible' : 'none';
                         map.setLayoutProperty(layerId, 'visibility', visibility);
+                        console.log(`[Layer] Visibility changed: ${layerId} -> ${visibility}`);
+                        updateUrlState();
                     });
+                } else {
+                    console.warn(`[Layer] Checkbox not found for toggle: ${layerId}`);
                 }
             }
 
@@ -545,18 +825,137 @@
                 osmCheckbox.addEventListener('change', (e) => {
                     const visibility = e.target.checked ? 'visible' : 'none';
                     map.setLayoutProperty('osm-tiles', 'visibility', visibility);
+                    console.log(`[Layer] OSM visibility changed: ${visibility}`);
+                    updateUrlState();
                 });
+            } else {
+                console.warn('[Layer] OSM checkbox not found');
+            }
+
+            // Update URL on map move/zoom
+            map.on('moveend', updateUrlState);
+
+            // Set initial URL state (if not already set from parsing)
+            if (!window.location.hash) {
+                updateUrlState();
+            }
+
+            console.log('[Map] All layers initialized');
+        });
+
+        // Handle source data loading errors
+        map.on('sourcedataloading', (e) => {
+            if (e.sourceId && e.tile) {
+                // Only log tile loading at debug level (too verbose for normal use)
+                // console.debug(`[Tile] Loading: ${e.sourceId} z=${e.tile.tileID.canonical.z}`);
             }
         });
 
-        // Handle map load errors
+        // Handle source errors (e.g., tile fetch failures)
         map.on('error', (e) => {
-            console.error('Map error:', e.error);
-            if (e.error && e.error.message && e.error.message.includes('Failed to fetch')) {
-                document.getElementById('loading').textContent =
-                    'Failed to load tiles. Make sure Martin tile server is running on ' + CONFIG.TILE_SERVER_URL;
-                document.getElementById('loading').classList.remove('hidden');
+            const errorInfo = {
+                message: e.error?.message || 'Unknown error',
+                sourceId: e.sourceId || null,
+                tileId: e.tile?.tileID?.canonical || null
+            };
+
+            // Categorize error types
+            if (e.error?.message?.includes('Failed to fetch')) {
+                console.error('[Tile] Failed to fetch tile:', errorInfo);
+
+                // Show user-friendly message for tile server connection issues
+                if (!document.getElementById('loading').classList.contains('hidden')) {
+                    // Only update if loading indicator is already visible
+                } else if (e.sourceId && e.sourceId !== 'osm') {
+                    // Martin tile server issue
+                    console.error(`[Tile] Martin server may be down: ${CONFIG.TILE_SERVER_URL}`);
+                }
+            } else if (e.error?.message?.includes('HTTP')) {
+                console.error('[HTTP] HTTP error loading resource:', errorInfo);
+            } else if (e.error?.message?.includes('JSON')) {
+                console.error('[Parse] JSON parse error:', errorInfo);
+            } else {
+                console.error('[Map] General error:', e.error || e);
             }
+
+            // Show loading indicator with error message for critical failures
+            if (e.error?.message?.includes('Failed to fetch') && e.sourceId !== 'osm') {
+                const loadingEl = document.getElementById('loading');
+                loadingEl.textContent =
+                    'Failed to load tiles. Make sure Martin tile server is running on ' + CONFIG.TILE_SERVER_URL;
+                loadingEl.classList.remove('hidden');
+            }
+        });
+
+        // Tile loading indicator management
+        const tileLoadingEl = document.getElementById('tile-loading');
+        const loadingSources = new Set();
+
+        function showTileLoading() {
+            tileLoadingEl.classList.remove('hidden');
+        }
+
+        function hideTileLoading() {
+            tileLoadingEl.classList.add('hidden');
+        }
+
+        function showLayerLoading(sourceId) {
+            const label = document.querySelector(`label[data-layer="${sourceId}"]`);
+            if (label) {
+                label.setAttribute('data-loading', 'true');
+            }
+        }
+
+        function hideLayerLoading(sourceId) {
+            const label = document.querySelector(`label[data-layer="${sourceId}"]`);
+            if (label) {
+                label.removeAttribute('data-loading');
+            }
+        }
+
+        function hideAllLayerLoading() {
+            document.querySelectorAll('label[data-loading]').forEach(label => {
+                label.removeAttribute('data-loading');
+            });
+        }
+
+        // Show loading indicator when source data starts loading
+        map.on('dataloading', (e) => {
+            if (e.dataType === 'source' && e.sourceId) {
+                showTileLoading();
+                loadingSources.add(e.sourceId);
+                showLayerLoading(e.sourceId);
+            }
+        });
+
+        // Hide layer loading when source is fully loaded
+        map.on('sourcedata', (e) => {
+            if (e.isSourceLoaded && e.sourceId) {
+                console.log(`[Source] Loaded: ${e.sourceId}`);
+                loadingSources.delete(e.sourceId);
+                hideLayerLoading(e.sourceId);
+            }
+        });
+
+        // Log idle state and hide all loading indicators
+        let firstIdleLogged = false;
+        map.on('idle', () => {
+            hideTileLoading();
+            hideAllLayerLoading();
+            loadingSources.clear();
+            if (!firstIdleLogged) {
+                console.log('[Map] Idle - initial tiles loaded');
+                firstIdleLogged = true;
+            }
+        });
+
+        // Log WebGL context loss (serious error)
+        map.on('webglcontextlost', () => {
+            console.error('[WebGL] Context lost! Map rendering may be broken.');
+        });
+
+        map.on('webglcontextrestored', () => {
+            console.log('[WebGL] Context restored');
         });
     </script>
 </body>
