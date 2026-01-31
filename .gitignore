@@ -2,6 +2,7 @@
 data/*.zip
 data/*.xml
 data/*.gz
+data/*.json
 
 # Python
 __pycache__/
