@@ -2,6 +2,8 @@
 
 import logging
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +41,27 @@ EXPECTED_TABLES_OB = [
 
 # All possible tables (from both ST and OB files)
 EXPECTED_TABLES = EXPECTED_TABLES_ST + EXPECTED_TABLES_OB
+
+
+class _ProgressCounter:
+    """Thread-safe progress counter."""
+
+    def __init__(self, total: int):
+        self.total = total
+        self.completed = 0
+        self.success = 0
+        self.failed = 0
+        self._lock = threading.Lock()
+
+    def increment(self, success: bool) -> tuple[int, int, int]:
+        """Increment counter and return (completed, success, failed)."""
+        with self._lock:
+            self.completed += 1
+            if success:
+                self.success += 1
+            else:
+                self.failed += 1
+            return self.completed, self.success, self.failed
 
 
 class RuianImporter:
@@ -337,6 +360,7 @@ class RuianImporter:
     def import_all_municipalities(
         self,
         resume: bool = False,
+        workers: int = 1,
     ) -> tuple[int, int, int]:
         """
         Import all municipality (OB) VFR files from the data directory.
@@ -346,6 +370,7 @@ class RuianImporter:
 
         Args:
             resume: If True, skip files that have already been imported.
+            workers: Number of parallel import workers (default: 1 for sequential).
 
         Returns:
             Tuple of (successful imports, skipped, failed imports).
@@ -377,8 +402,37 @@ class RuianImporter:
             logger.info("All OB files have already been imported")
             return 0, skipped_initial, 0
 
-        logger.info("Importing %d OB files (append mode)...", total)
+        logger.info("Importing %d OB files (append mode, %d workers)...", total, workers)
 
+        if workers > 1:
+            # Parallel import
+            success, failed = self._import_municipalities_parallel(files, workers)
+        else:
+            # Sequential import (original behavior)
+            success, failed = self._import_municipalities_sequential(files)
+
+        logger.info(
+            "Import complete: %d success, %d skipped, %d failed",
+            success,
+            skipped_initial,
+            failed,
+        )
+        return success, skipped_initial, failed
+
+    def _import_municipalities_sequential(
+        self,
+        files: list[Path],
+    ) -> tuple[int, int]:
+        """
+        Import municipality files sequentially.
+
+        Args:
+            files: List of VFR files to import.
+
+        Returns:
+            Tuple of (success, failed) counts.
+        """
+        total = len(files)
         success = 0
         failed = 0
 
@@ -417,13 +471,61 @@ class RuianImporter:
                     failed,
                 )
 
-        logger.info(
-            "Import complete: %d success, %d skipped, %d failed",
-            success,
-            skipped_initial,
-            failed,
-        )
-        return success, skipped_initial, failed
+        return success, failed
+
+    def _import_municipalities_parallel(
+        self,
+        files: list[Path],
+        workers: int,
+    ) -> tuple[int, int]:
+        """
+        Import municipality files in parallel using ThreadPoolExecutor.
+
+        Args:
+            files: List of VFR files to import.
+            workers: Number of parallel workers.
+
+        Returns:
+            Tuple of (success, failed) counts.
+        """
+        total = len(files)
+        progress = _ProgressCounter(total)
+
+        def import_task(vfr_file: Path) -> tuple[Path, bool, str | None]:
+            """Import single file, return (path, success, error)."""
+            try:
+                result = self.import_file(vfr_file, overwrite=False)
+                return vfr_file, result, None
+            except Exception as e:
+                return vfr_file, False, str(e)
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(import_task, f): f for f in files}
+
+            for future in as_completed(futures):
+                vfr_file, ok, error = future.result()
+                completed, succ, fail = progress.increment(ok)
+
+                if ok:
+                    self._log_import(vfr_file.name, "success")
+                else:
+                    error_msg = error or "import_file returned False"
+                    self._log_import(vfr_file.name, "failed", error_msg)
+                    if error:
+                        logger.error("Failed to import %s: %s", vfr_file.name, error)
+
+                # Progress update every 100 files
+                if completed % 100 == 0:
+                    logger.info(
+                        "Progress: %d/%d (%d%%) - %d ok, %d failed",
+                        completed,
+                        total,
+                        completed * 100 // total,
+                        succ,
+                        fail,
+                    )
+
+        return progress.success, progress.failed
 
     def import_latest_municipalities(self) -> tuple[int, int]:
         """

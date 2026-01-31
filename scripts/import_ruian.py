@@ -38,6 +38,7 @@ Examples:
   %(prog)s --verify                  # Verify import was successful
   %(prog)s --municipalities          # Import all municipality (OB) files
   %(prog)s --municipalities --continue  # Resume interrupted OB import
+  %(prog)s --municipalities -w 8     # Parallel import with 8 workers
 
 Environment variables:
   RUIAN_DB_HOST      Database host (default: localhost)
@@ -103,6 +104,13 @@ Environment variables:
         action="store_true",
         dest="resume",
         help="Resume interrupted import (skip already imported files)",
+    )
+    parser.add_argument(
+        "--workers",
+        "-w",
+        type=int,
+        default=1,
+        help="Number of parallel import workers (default: 1)",
     )
 
     parser.add_argument(
@@ -220,7 +228,12 @@ Environment variables:
                 print("Resuming municipality import (skipping already imported files)...")
             else:
                 print("Importing all municipality (OB) files...")
-            success, skipped, failed = importer.import_all_municipalities(resume=args.resume)
+            if args.workers > 1:
+                print(f"Using {args.workers} parallel workers")
+            success, skipped, failed = importer.import_all_municipalities(
+                resume=args.resume,
+                workers=args.workers,
+            )
             print(f"Import complete: {success} success, {skipped} skipped, {failed} failed")
             return 0 if failed == 0 else 1
 
