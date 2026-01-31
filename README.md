@@ -109,13 +109,13 @@ sudo -u postgres psql -d ruian -c "CREATE EXTENSION IF NOT EXISTS postgis;"
 
 ```bash
 # Run all tests
-uv run pytest tests/ -v
+uv run python -m pytest tests/ -v
 
 # Run with coverage report
-uv run pytest tests/ -v --cov=src/ruian_import
+uv run python -m pytest tests/ -v --cov=src/ruian_import
 
 # Run specific test file
-uv run pytest tests/test_downloader.py -v
+uv run python -m pytest tests/test_downloader.py -v
 ```
 
 ### Code Quality
@@ -327,6 +327,74 @@ maintenance_work_mem = 1GB
 effective_cache_size = 6GB
 checkpoint_completion_target = 0.9
 ```
+
+## Web Map Viewer
+
+The project includes an interactive web map for visualizing RUIAN data using vector tiles.
+
+### Architecture
+
+```
+Browser (MapLibre GL JS)
+    ↓ HTTP: /tiles/{layer}/{z}/{x}/{y}
+Martin Tile Server (Docker)
+    ↓ PostgreSQL connection
+PostGIS Database
+```
+
+### Quick Start
+
+```bash
+# 1. Ensure PostGIS is running
+podman start ruian-postgis
+
+# 2. Start Martin tile server
+podman run -d --name martin -p 3000:3000 \
+  -v ./martin/martin.yaml:/config.yaml:ro \
+  ghcr.io/maplibre/martin --config /config.yaml
+
+# 3. Serve the web frontend
+cd web && python3 -m http.server 8080
+
+# 4. Open in browser
+open http://localhost:8080
+```
+
+### Available Layers
+
+| Layer | Type | Description |
+|-------|------|-------------|
+| `adresnimista` | points | Address points (zoom 14+) |
+| `stavebniobjekty` | polygons | Buildings (zoom 13+) |
+| `parcely` | polygons | Land parcels (zoom 15+) |
+| `ulice` | lines | Streets (zoom 12+) |
+| `obce` | polygons | Municipality boundaries (zoom 8-14) |
+| `katastralniuzemi` | polygons | Cadastral areas (zoom 12+) |
+| `okresy` | polygons | District boundaries (zoom 6-12) |
+
+### Verify Tile Server
+
+```bash
+# Health check
+curl http://localhost:3000/health
+
+# List available sources
+curl http://localhost:3000/catalog
+
+# Get TileJSON for a layer
+curl http://localhost:3000/obce
+```
+
+### Production Deployment
+
+For production, configure Martin with the server's database connection in `martin/martin.yaml`:
+
+```yaml
+postgres:
+  connection_string: 'postgresql://ruian:ruian@localhost:5432/ruian'
+```
+
+Use nginx or similar to serve the static frontend and optionally proxy Martin.
 
 ## Data Source
 

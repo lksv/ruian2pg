@@ -12,13 +12,13 @@ RUIAN Import - tool for downloading and importing Czech RUIAN (territorial ident
 
 ```bash
 # Quick validation (run after each change)
-uv run pytest tests/ -v
+uv run python -m pytest tests/ -v
 
 # Full validation before committing
 uv run ruff check src/ scripts/ tests/
 uv run ruff format src/ scripts/ tests/
 uv run mypy src/ruian_import/ scripts/
-uv run pytest tests/ -v
+uv run python -m pytest tests/ -v
 ```
 
 ## Commands
@@ -40,16 +40,16 @@ uv run ruff format src/ scripts/ tests/
 uv run mypy src/ruian_import/ scripts/
 
 # Run all tests
-uv run pytest tests/ -v
+uv run python -m pytest tests/ -v
 
 # Run tests with coverage
-uv run pytest tests/ -v --cov=src/ruian_import
+uv run python -m pytest tests/ -v --cov=src/ruian_import
 
 # Run single test file
-uv run pytest tests/test_downloader.py -v
+uv run python -m pytest tests/test_downloader.py -v
 
 # Run single test
-uv run pytest tests/test_downloader.py::TestRuianDownloaderPatterns::test_ob_file_pattern -v
+uv run python -m pytest tests/test_downloader.py::TestRuianDownloaderPatterns::test_ob_file_pattern -v
 
 # Download RUIAN data
 uv run python scripts/download_ruian.py --latest
@@ -101,3 +101,64 @@ Default connection: `localhost:5432/ruian` (user: ruian, password: ruian)
 Configure via environment variables: `RUIAN_DB_HOST`, `RUIAN_DB_PORT`, `RUIAN_DB_NAME`, `RUIAN_DB_USER`, `RUIAN_DB_PASSWORD`
 
 Coordinate system: S-JTSK / Krovak East North (EPSG:5514)
+
+## Web Map
+
+Interactive map viewer using MapLibre GL JS and Martin tile server.
+
+### Directory Structure
+
+```
+web/
+└── index.html          # MapLibre frontend with layer controls
+
+martin/
+└── martin.yaml         # Martin tile server configuration
+
+scripts/
+└── setup_indexes.sql   # Spatial indexes for tile performance
+```
+
+### Start Web Map Services
+
+```bash
+# Start Martin tile server
+podman run -d --name martin -p 3000:3000 \
+  -v ./martin/martin.yaml:/config.yaml:ro \
+  ghcr.io/maplibre/martin --config /config.yaml
+
+# Serve frontend (development)
+cd web && python3 -m http.server 8080
+
+# Open http://localhost:8080
+```
+
+### Martin Commands
+
+```bash
+# Check health
+curl http://localhost:3000/health
+
+# List sources
+curl http://localhost:3000/catalog
+
+# Test tile (Brno area, zoom 10)
+curl -o /tmp/tile.pbf http://localhost:3000/obce/10/559/351
+
+# View logs
+podman logs martin
+
+# Restart after config change
+podman restart martin
+```
+
+### Tile Server Configuration
+
+The `martin/martin.yaml` configures which tables and geometry columns to serve:
+
+- `adresnimista` - address points (`geom`)
+- `stavebniobjekty` - buildings (`originalnihranice`)
+- `parcely` - parcels (`originalnihranice`)
+- `ulice` - streets (`geom`)
+- `obce` - municipalities (`originalnihranice`)
+- `okresy` - districts (`generalizovanehranice`)
