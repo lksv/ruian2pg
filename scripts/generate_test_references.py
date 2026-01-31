@@ -558,21 +558,15 @@ def cleanup_test_data(conn: Connection) -> int:
         """
 
         # Delete references first (cascade should handle this, but be explicit)
-        cur.execute(
-            f"DELETE FROM parcel_refs WHERE attachment_id IN ({test_attachments_subquery})"
-        )
+        cur.execute(f"DELETE FROM parcel_refs WHERE attachment_id IN ({test_attachments_subquery})")
 
         cur.execute(
             f"DELETE FROM address_refs WHERE attachment_id IN ({test_attachments_subquery})"
         )
 
-        cur.execute(
-            f"DELETE FROM street_refs WHERE attachment_id IN ({test_attachments_subquery})"
-        )
+        cur.execute(f"DELETE FROM street_refs WHERE attachment_id IN ({test_attachments_subquery})")
 
-        cur.execute(
-            f"DELETE FROM lv_refs WHERE attachment_id IN ({test_attachments_subquery})"
-        )
+        cur.execute(f"DELETE FROM lv_refs WHERE attachment_id IN ({test_attachments_subquery})")
 
         # building_refs table may not exist if migration v3 wasn't applied
         if _table_exists(cur, "building_refs"):
@@ -813,7 +807,7 @@ def main() -> None:
         if building_refs_created:
             print(f"Created {len(buildings)} building references")
         else:
-            print("Skipped building references (table not found - run migrate_notice_boards_v3.sql)")
+            print("Skipped building refs (run migrate_notice_boards_v3.sql)")
 
         conn.commit()
 
