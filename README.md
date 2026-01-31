@@ -78,16 +78,16 @@ pip install -e .
 podman volume create ruian_pgdata
 
 # Start PostGIS container
-# On Apple Silicon with Podman emulation: use --platform linux/amd64
-# On native ARM64/amd64 servers: omit --platform flag
+# On Apple Silicon with Podman emulation: add --platform linux/amd64
+# PostgreSQL 18+ uses /var/lib/postgresql (not /var/lib/postgresql/data)
 podman run -d \
   --name ruian-postgis \
   -e POSTGRES_USER=ruian \
   -e POSTGRES_PASSWORD=ruian \
   -e POSTGRES_DB=ruian \
   -p 5432:5432 \
-  -v ruian_pgdata:/var/lib/postgresql/data:Z \
-  docker.io/postgis/postgis:17-3.5
+  -v ruian_pgdata:/var/lib/postgresql:Z \
+  docker.io/postgis/postgis:18-3.6
 
 # Initialize extensions
 podman exec -it ruian-postgis psql -U ruian -d ruian -c \
