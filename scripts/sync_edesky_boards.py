@@ -11,6 +11,9 @@ Usage:
     # Match and update existing boards with eDesky data
     uv run python scripts/sync_edesky_boards.py --all --match-existing
 
+    # Clean import: INSERT only after TRUNCATE (no matching, no upsert)
+    uv run python scripts/sync_edesky_boards.py --all --create-only
+
     # Preview matches without updating (dry-run)
     uv run python scripts/sync_edesky_boards.py --all --match-existing --dry-run
 
@@ -59,6 +62,7 @@ class SyncStats:
     matched_by_name: int = 0
     created_new: int = 0
     skipped_ambiguous: int = 0
+    skipped_duplicate: int = 0
     errors: int = 0
     ambiguous_boards: list[str] = field(default_factory=list)
 
@@ -75,7 +79,13 @@ class SyncStats:
     @property
     def total_processed(self) -> int:
         """Total boards processed."""
-        return self.total_matched + self.created_new + self.skipped_ambiguous + self.errors
+        return (
+            self.total_matched
+            + self.created_new
+            + self.skipped_ambiguous
+            + self.skipped_duplicate
+            + self.errors
+        )
 
 
 def extract_edesky_id_from_url(url: str) -> int | None:
@@ -262,6 +272,7 @@ def sync_all_dashboards(
     client: EdeskyApiClient,
     repo: DocumentRepository,
     match_existing: bool = False,
+    create_only: bool = False,
     dry_run: bool = False,
     verbose: bool = False,
 ) -> SyncStats:
@@ -271,12 +282,15 @@ def sync_all_dashboards(
         client: eDesky API client.
         repo: Document repository for database operations.
         match_existing: Match and update existing boards.
+        create_only: Only create new records, no matching (for clean import).
         dry_run: Preview without making changes.
         verbose: Enable verbose output.
 
     Returns:
         SyncStats with operation results.
     """
+    import psycopg2
+
     stats = SyncStats()
 
     logger.info("Fetching all notice boards from eDesky API...")
@@ -293,7 +307,46 @@ def sync_all_dashboards(
             logger.info(f"Processing {i}/{len(dashboards)}...")
 
         try:
-            if match_existing:
+            if create_only:
+                # INSERT only mode for clean imports (no matching, no upsert)
+                if not dry_run:
+                    try:
+                        repo.create_notice_board_from_edesky(
+                            edesky_id=dashboard.edesky_id,
+                            name=dashboard.name,
+                            category=dashboard.category,
+                            ico=dashboard.ico,
+                            nuts3_id=dashboard.nuts3_id,
+                            nuts3_name=dashboard.nuts3_name,
+                            nuts4_id=dashboard.nuts4_id,
+                            nuts4_name=dashboard.nuts4_name,
+                            parent_id=dashboard.parent_id,
+                            parent_name=dashboard.parent_name,
+                            url=dashboard.url,
+                            latitude=dashboard.latitude,
+                            longitude=dashboard.longitude,
+                        )
+                        stats.created_new += 1
+                        if verbose:
+                            logger.info(
+                                f"  Created: {dashboard.name} (edesky_id={dashboard.edesky_id})"
+                            )
+                    except psycopg2.IntegrityError:
+                        # Duplicate edesky_id - rollback and skip
+                        repo.conn.rollback()
+                        stats.skipped_duplicate += 1
+                        if verbose:
+                            logger.debug(
+                                f"  Skipped duplicate: {dashboard.name} "
+                                f"(edesky_id={dashboard.edesky_id})"
+                            )
+                else:
+                    stats.created_new += 1
+                    if verbose:
+                        logger.info(
+                            f"  Would create: {dashboard.name} (edesky_id={dashboard.edesky_id})"
+                        )
+            elif match_existing:
                 matched = match_and_update_board(
                     repo=repo,
                     dashboard=dashboard,
@@ -476,13 +529,18 @@ def print_sync_summary(stats: SyncStats, dry_run: bool = False) -> None:
     print(f"\n{prefix}Sync Summary:")
     print(f"  Total processed:        {stats.total_processed:,}")
     print(f"  Matched (total):        {stats.total_matched:,}")
-    print(f"    - by eDesky ID:       {stats.matched_by_edesky_id:,}")
-    print(f"    - by eDesky URL:      {stats.matched_by_edesky_url:,}")
-    print(f"    - by ICO:             {stats.matched_by_ico:,}")
-    print(f"    - by name:            {stats.matched_by_name:,}")
+    if stats.total_matched > 0:
+        print(f"    - by eDesky ID:       {stats.matched_by_edesky_id:,}")
+        print(f"    - by eDesky URL:      {stats.matched_by_edesky_url:,}")
+        print(f"    - by ICO:             {stats.matched_by_ico:,}")
+        print(f"    - by name:            {stats.matched_by_name:,}")
     print(f"  Created new:            {stats.created_new:,}")
-    print(f"  Skipped (ambiguous):    {stats.skipped_ambiguous:,}")
-    print(f"  Errors:                 {stats.errors:,}")
+    if stats.skipped_ambiguous > 0:
+        print(f"  Skipped (ambiguous):    {stats.skipped_ambiguous:,}")
+    if stats.skipped_duplicate > 0:
+        print(f"  Skipped (duplicate):    {stats.skipped_duplicate:,}")
+    if stats.errors > 0:
+        print(f"  Errors:                 {stats.errors:,}")
 
     if stats.ambiguous_boards and len(stats.ambiguous_boards) <= 20:
         print("\nAmbiguous boards (multiple matches):")
@@ -512,6 +570,11 @@ def main() -> None:
         "--match-existing",
         action="store_true",
         help="Match eDesky boards to existing records by ICO/name before creating new ones",
+    )
+    parser.add_argument(
+        "--create-only",
+        action="store_true",
+        help="Only create new records without matching (for clean import after TRUNCATE)",
     )
     parser.add_argument(
         "--dry-run",
@@ -549,6 +612,14 @@ def main() -> None:
         logger.error("--match-existing requires --all flag")
         sys.exit(1)
 
+    if args.create_only and not args.all:
+        logger.error("--create-only requires --all flag")
+        sys.exit(1)
+
+    if args.match_existing and args.create_only:
+        logger.error("--match-existing and --create-only are mutually exclusive")
+        sys.exit(1)
+
     if args.dry_run and not args.all:
         logger.error("--dry-run requires --all flag")
         sys.exit(1)
@@ -573,6 +644,7 @@ def main() -> None:
                     client=client,
                     repo=repo,
                     match_existing=args.match_existing,
+                    create_only=args.create_only,
                     dry_run=args.dry_run,
                     verbose=args.verbose,
                 )

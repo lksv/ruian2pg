@@ -459,8 +459,11 @@ Data sources:
 ### Import Notice Boards to Database
 
 ```bash
-# Import from JSON file
+# Import from JSON file (creates new records)
 uv run python scripts/import_notice_boards.py data/notice_boards.json
+
+# Enrich existing records (match by ICO/name, don't create new)
+uv run python scripts/import_notice_boards.py data/notice_boards.json --enrich-only
 
 # Show database statistics
 uv run python scripts/import_notice_boards.py --stats

@@ -55,6 +55,9 @@ uv run python scripts/import_ruian.py --municipalities --continue
 uv run python scripts/fetch_notice_boards.py -o data/notice_boards.json
 uv run python scripts/import_notice_boards.py data/notice_boards.json
 
+# Enrich existing records (match by ICO/name, don't create new)
+uv run python scripts/import_notice_boards.py data/notice_boards.json --enrich-only
+
 # Apply database migrations (run in order)
 psql -U ruian -d ruian -f scripts/setup_notice_boards_db.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v2.sql

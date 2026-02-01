@@ -383,7 +383,7 @@ with EdeskyApiClient(config) as client:
     # Fetch all boards from a region with subordinates
     dashboards = client.get_dashboards(edesky_id=112, include_subordinated=True)
 
-    # Fetch ALL boards (iterates through Čechy + Morava)
+    # Fetch ALL boards (hybrid: hierarchical + flat API to catch standalone entities)
     all_boards = client.get_all_dashboards()
 
     for board in dashboards:
@@ -444,7 +444,25 @@ repo.update_notice_board_edesky_fields(
 # Statistics
 stats = repo.get_notice_board_stats()
 print(f"Total: {stats['total']}, With eDesky ID: {stats['with_edesky_id']}")
+
+# Smart name matching (handles prefix variants and city districts)
+board = repo.find_notice_board_by_name_district("Brno-Medlánky", district="Brno-město")
 ```
+
+**Name matching logic** (`find_notice_board_by_name_district`):
+
+The function handles naming differences between data sources:
+
+1. **Prefix variants**: Adds common prefixes used by eDesky
+   - `"Lipnice"` → also tries `"Obec Lipnice"`, `"Město Lipnice"`, `"Městys Lipnice"`
+
+2. **City district patterns**: Special handling for statutory cities
+   - `"Brno-Medlánky"` → `"MČ Brno - Medlánky"`
+   - `"Praha 1"` → `"MČ Praha 1"`, `"Městská část Praha 1"`
+   - `"Ostrava-Poruba"` → `"MČ Ostrava - Poruba"`, `"MČ Poruba"`
+   - `"Pardubice I"` → `"MČ Pardubice I"`, `"MČ Pardubice I - střed"`
+
+3. **Exact match required**: Returns `None` if 0 or >1 matches (ambiguous)
 
 ### Configuration (`config.py`)
 

@@ -5,8 +5,11 @@ This script reads notice board data from a JSON file (produced by fetch_notice_b
 and imports it into the notice_boards table using upsert (ON CONFLICT) logic.
 
 Usage:
-    # Import from JSON
+    # Import from JSON (upsert mode)
     uv run python scripts/import_notice_boards.py data/notice_boards.json
+
+    # Enrich existing boards (match by ICO/name, only update NULL fields)
+    uv run python scripts/import_notice_boards.py --enrich-only data/notice_boards.json
 
     # Show statistics
     uv run python scripts/import_notice_boards.py --stats
@@ -16,6 +19,7 @@ import argparse
 import json
 import logging
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -30,8 +34,31 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from notice_boards.config import get_db_connection
 from notice_boards.models import NoticeBoard
+from notice_boards.repository import DocumentRepository
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class EnrichStats:
+    """Statistics for enrich operation."""
+
+    matched_by_ico: int = 0
+    matched_by_name: int = 0
+    enriched: int = 0
+    skipped_no_match: int = 0
+    skipped_no_unique_key: int = 0
+    errors: int = 0
+
+    @property
+    def total_matched(self) -> int:
+        """Total boards matched."""
+        return self.matched_by_ico + self.matched_by_name
+
+    @property
+    def total_processed(self) -> int:
+        """Total boards processed."""
+        return self.total_matched + self.skipped_no_match + self.skipped_no_unique_key + self.errors
 
 
 def json_to_notice_board(data: dict[str, Any]) -> NoticeBoard:
@@ -206,15 +233,162 @@ def import_from_json(input_path: Path) -> None:
         conn.close()
 
 
+def enrich_from_json(input_path: Path, verbose: bool = False) -> EnrichStats:
+    """Enrich existing notice boards from JSON file.
+
+    Matches existing boards (created from eDesky) by ICO or name+district
+    and updates only NULL fields with data from Česko.Digital.
+
+    Args:
+        input_path: Path to JSON file with Česko.Digital data.
+        verbose: Enable verbose output.
+
+    Returns:
+        EnrichStats with operation results.
+    """
+    stats = EnrichStats()
+
+    logger.info(f"Reading notice boards from {input_path}...")
+
+    with open(input_path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    if not isinstance(data, list):
+        raise ValueError(f"Expected JSON array, got {type(data).__name__}")
+
+    logger.info(f"Loaded {len(data)} records from JSON")
+
+    conn = get_db_connection()
+    try:
+        repo = DocumentRepository(conn)
+
+        for i, entry in enumerate(data, 1):
+            if verbose and i % 500 == 0:
+                logger.info(f"Processing {i}/{len(data)}...")
+
+            try:
+                board = json_to_notice_board(entry)
+
+                # Skip entries without ICO (needed for matching)
+                if not board.ico and not board.name:
+                    stats.skipped_no_unique_key += 1
+                    continue
+
+                # Try to match existing board
+                existing = None
+                match_type = None
+
+                # 1. Try matching by ICO first (most reliable)
+                if board.ico:
+                    boards = repo.get_notice_boards_by_ico(board.ico)
+                    if len(boards) == 1:
+                        existing = boards[0]
+                        match_type = "ico"
+                    elif len(boards) > 1:
+                        # Multiple boards with same ICO - try to disambiguate by name
+                        name_matches = [b for b in boards if b.name.lower() == board.name.lower()]
+                        if len(name_matches) == 1:
+                            existing = name_matches[0]
+                            match_type = "ico"
+
+                # 2. Try matching by name + district if no ICO match
+                if not existing and board.name:
+                    existing = repo.find_notice_board_by_name_district(
+                        name=board.name,
+                        district=board.address_district,
+                    )
+                    if existing:
+                        match_type = "name"
+
+                # 3. Fallback: try name-only match (no district)
+                #    Only if there's exactly one board with that name
+                if not existing and board.name:
+                    existing = repo.find_notice_board_by_name_district(
+                        name=board.name,
+                        district=None,
+                    )
+                    if existing:
+                        match_type = "name"
+
+                if not existing:
+                    stats.skipped_no_match += 1
+                    if verbose:
+                        logger.debug(
+                            f"No match for: {board.name} (ICO={board.ico}, "
+                            f"district={board.address_district})"
+                        )
+                    continue
+
+                # Update match stats
+                if match_type == "ico":
+                    stats.matched_by_ico += 1
+                else:
+                    stats.matched_by_name += 1
+
+                # Enrich the existing board
+                repo.enrich_notice_board(
+                    board_id=existing.id,  # type: ignore
+                    municipality_code=board.municipality_code,
+                    source_url=board.source_url,
+                    ofn_json_url=board.ofn_json_url,
+                    data_box_id=board.data_box_id,
+                    address_street=board.address_street,
+                    address_city=board.address_city,
+                    address_district=board.address_district,
+                    address_postal_code=board.address_postal_code,
+                    address_region=board.address_region,
+                    address_point_id=board.address_point_id,
+                    abbreviation=board.abbreviation,
+                    emails=board.emails if board.emails else None,
+                    legal_form_code=board.legal_form_code,
+                    legal_form_label=board.legal_form_label,
+                    board_type=board.board_type,
+                    nutslau=board.nutslau,
+                    coat_of_arms_url=board.coat_of_arms_url,
+                )
+                stats.enriched += 1
+
+                if verbose:
+                    logger.info(
+                        f"Enriched: {board.name} (matched by {match_type}, "
+                        f"existing_id={existing.id})"
+                    )
+
+            except Exception as e:
+                stats.errors += 1
+                logger.error(f"Failed to process entry: {e}")
+
+    finally:
+        conn.close()
+
+    return stats
+
+
+def print_enrich_summary(stats: EnrichStats) -> None:
+    """Print summary of enrich operation."""
+    print("\nEnrich Summary:")
+    print(f"  Total processed:        {stats.total_processed:,}")
+    print(f"  Matched (total):        {stats.total_matched:,}")
+    if stats.total_matched > 0:
+        print(f"    - by ICO:             {stats.matched_by_ico:,}")
+        print(f"    - by name+district:   {stats.matched_by_name:,}")
+    print(f"  Enriched:               {stats.enriched:,}")
+    if stats.skipped_no_match > 0:
+        print(f"  Skipped (no match):     {stats.skipped_no_match:,}")
+    if stats.skipped_no_unique_key > 0:
+        print(f"  Skipped (no key):       {stats.skipped_no_unique_key:,}")
+    if stats.errors > 0:
+        print(f"  Errors:                 {stats.errors:,}")
+
+
 def show_stats() -> None:
     """Show statistics about notice boards in database."""
     conn = get_db_connection()
     try:
-        with conn.cursor() as cur:
-            # Total count
-            cur.execute("SELECT COUNT(*) FROM notice_boards")
-            total = cur.fetchone()[0]
+        repo = DocumentRepository(conn)
+        db_stats = repo.get_notice_board_stats()
 
+        with conn.cursor() as cur:
             # By board type
             cur.execute("""
                 SELECT board_type, COUNT(*)
@@ -224,29 +398,19 @@ def show_stats() -> None:
             """)
             by_type = cur.fetchall()
 
-            # With URLs
-            cur.execute("SELECT COUNT(*) FROM notice_boards WHERE source_url IS NOT NULL")
-            with_url = cur.fetchone()[0]
-
-            cur.execute("SELECT COUNT(*) FROM notice_boards WHERE ofn_json_url IS NOT NULL")
-            with_ofn = cur.fetchone()[0]
-
-            cur.execute("SELECT COUNT(*) FROM notice_boards WHERE edesky_url IS NOT NULL")
-            with_edesky = cur.fetchone()[0]
-
-            # With RUIAN reference
-            cur.execute("SELECT COUNT(*) FROM notice_boards WHERE municipality_code IS NOT NULL")
-            with_ruian = cur.fetchone()[0]
-
-            print("\nNotice Board Statistics:")
-            print(f"  Total:              {total:,}")
-            print(f"  With official URL:  {with_url:,}")
-            print(f"  With OFN JSON URL:  {with_ofn:,}")
-            print(f"  With eDesky URL:    {with_edesky:,}")
-            print(f"  With RUIAN ref:     {with_ruian:,}")
-            print("\nBy type:")
-            for board_type, count in by_type:
-                print(f"  {board_type or 'NULL':20} {count:,}")
+        print("\nNotice Board Statistics:")
+        print(f"  Total:              {db_stats['total']:,}")
+        print(f"  With eDesky ID:     {db_stats['with_edesky_id']:,}")
+        print(f"  With ICO:           {db_stats['with_ico']:,}")
+        print(f"  With official URL:  {db_stats['with_source_url']:,}")
+        print(f"  With eDesky URL:    {db_stats['with_edesky_url']:,}")
+        print(f"  With RUIAN ref:     {db_stats['with_municipality_code']:,}")
+        print(f"  With data box:      {db_stats['with_data_box']:,}")
+        print(f"  With NUTS3:         {db_stats['with_nuts3']:,}")
+        print(f"  With NUTS4:         {db_stats['with_nuts4']:,}")
+        print("\nBy type:")
+        for board_type, count in by_type:
+            print(f"  {board_type or 'NULL':20} {count:,}")
     finally:
         conn.close()
 
@@ -273,6 +437,11 @@ def main() -> None:
         help="Input JSON file path",
     )
     parser.add_argument(
+        "--enrich-only",
+        action="store_true",
+        help="Only enrich existing boards (match by ICO/name), don't create new ones",
+    )
+    parser.add_argument(
         "--stats",
         action="store_true",
         help="Show database statistics instead of importing",
@@ -291,7 +460,11 @@ def main() -> None:
     if args.stats:
         show_stats()
     elif args.input:
-        import_from_json(args.input)
+        if args.enrich_only:
+            stats = enrich_from_json(args.input, verbose=args.verbose)
+            print_enrich_summary(stats)
+        else:
+            import_from_json(args.input)
     else:
         parser.print_help()
         sys.exit(1)

@@ -114,7 +114,7 @@ class EdeskyApiClient:
     def __enter__(self) -> "EdeskyApiClient":
         return self
 
-    def __exit__(self, *args: object) -> None:
+    def __exit__(self, *_args: object) -> None:
         self.close()
 
     def get_dashboards(
@@ -175,9 +175,9 @@ class EdeskyApiClient:
     def get_all_dashboards(self) -> list[EdeskyDashboard]:
         """Fetch ALL notice boards from eDesky API.
 
-        Iterates through Czech regions (kraje) and fetches all subordinated
-        boards using include_subordinated=1. Also fetches ministerstva and
-        other top-level entities.
+        Uses a hybrid approach:
+        1. First fetches via hierarchical top-level IDs (proven reliable)
+        2. Then supplements with flat API call to catch standalone entities
 
         Returns:
             List of EdeskyDashboard objects (deduplicated by edesky_id).
@@ -189,23 +189,17 @@ class EdeskyApiClient:
             raise ScraperError("eDesky API key not configured")
 
         # Known top-level eDesky IDs for Czech regions and structural divisions
-        # Discovered by querying API for IDs with >100 subordinates
         top_level_ids = [
             # Top-level structural divisions (covers all municipalities)
             112,  # Čechy (Bohemia) - ~3948 subordinates
             113,  # Morava (Moravia) - ~2477 subordinates
-            # Individual regions (kraje) as backup
-            50,  # Středočeský kraj - 1157 subordinates
-            62,  # Jihočeský kraj - 631 subordinates
-            70,  # Plzeňský kraj - 517 subordinates
-            76,  # Karlovarský kraj - 136 subordinates
-            80,  # Ústecký kraj - 365 subordinates
-            89,  # Liberecký kraj - 221 subordinates
-            96,  # Pardubický kraj - 465 subordinates
+            59,  # Praha (capital city) - 58 subordinates
+            1241,  # Instituce - ministries and state institutions (~20 subordinates)
         ]
 
         all_dashboards: dict[int, EdeskyDashboard] = {}
 
+        # Step 1: Fetch via hierarchical top-level IDs (proven reliable)
         for top_id in top_level_ids:
             try:
                 dashboards = self.get_dashboards(
@@ -213,13 +207,32 @@ class EdeskyApiClient:
                     include_subordinated=True,
                 )
                 for dashboard in dashboards:
-                    # Deduplicate by edesky_id
                     all_dashboards[dashboard.edesky_id] = dashboard
 
                 logger.info(f"Fetched {len(dashboards)} boards from region/category {top_id}")
             except ScraperError as e:
                 logger.warning(f"Failed to fetch boards for ID {top_id}: {e}")
                 continue
+
+        hierarchical_count = len(all_dashboards)
+        logger.info(f"Hierarchical fetch complete: {hierarchical_count} unique boards")
+
+        # Step 2: Supplement with flat API call to catch standalone entities
+        # (entities with parent=None that are not under any hierarchy)
+        try:
+            dashboards = self.get_dashboards()  # No ID = returns all as flat list
+            new_count = 0
+            for dashboard in dashboards:
+                if dashboard.edesky_id not in all_dashboards:
+                    all_dashboards[dashboard.edesky_id] = dashboard
+                    new_count += 1
+
+            logger.info(
+                f"Flat API call returned {len(dashboards)} boards, "
+                f"{new_count} new (standalone entities)"
+            )
+        except ScraperError as e:
+            logger.warning(f"Flat API call failed (standalone entities may be missed): {e}")
 
         logger.info(f"Total unique boards fetched: {len(all_dashboards)}")
         return list(all_dashboards.values())
@@ -263,11 +276,11 @@ class EdeskyApiClient:
 
         XML structure from /api/v1/dashboards:
             <dashboards>
-              <dashboard id="62" name="Jihočeský kraj" category="kraj"
-                         ico="70890650" nuts3_id="1" nuts3_name="..."
-                         nuts4_id="10" nuts4_name="..." parent_id="1"
-                         parent_name="..." url="..." latitude="49.0"
-                         longitude="14.5"/>
+              <dashboard edesky_id="62" name="Jihočeský kraj" category="samosprava"
+                         ovm_ico="70890650" nuts3_id="62" nuts3_name="..."
+                         nuts4_id="" nuts4_name="" parent_id="112"
+                         parent_name="Čechy" url="..." latitude="49.0"
+                         longitude="14.5" ruian_kod="35"/>
               ...
             </dashboards>
         """
@@ -300,7 +313,8 @@ class EdeskyApiClient:
                     edesky_id=int(edesky_id_str),
                     name=elem.get("name", ""),
                     category=elem.get("category"),
-                    ico=elem.get("ico"),
+                    # API returns ICO as 'ovm_ico' or 'ico'
+                    ico=elem.get("ovm_ico") or elem.get("ico"),
                     nuts3_id=int(nuts3_id_str) if nuts3_id_str else None,
                     nuts3_name=elem.get("nuts3_name"),
                     nuts4_id=int(nuts4_id_str) if nuts4_id_str else None,
@@ -371,7 +385,7 @@ class EdeskyXmlClient:
     def __enter__(self) -> "EdeskyXmlClient":
         return self
 
-    def __exit__(self, *args: object) -> None:
+    def __exit__(self, *_args: object) -> None:
         self.close()
 
     def get_documents(self, edesky_id: int) -> list[EdeskyDocument]:
@@ -562,7 +576,7 @@ class EdeskyScraper(NoticeBoardScraper):
     def __enter__(self) -> "EdeskyScraper":
         return self
 
-    def __exit__(self, *args: object) -> None:
+    def __exit__(self, *_args: object) -> None:
         self.close()
 
     def supports(self, source_type: str) -> bool:

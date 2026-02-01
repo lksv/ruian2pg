@@ -278,7 +278,9 @@ class TestRepositoryMethods:
         from notice_boards.repository import DocumentRepository
 
         cursor_mock = MagicMock()
-        cursor_mock.fetchone.return_value = (100, 80, 90, 85, 70, 60)
+        # Order: total, with_edesky_id, with_ico, with_edesky_url, with_nuts3, with_nuts4,
+        #        with_municipality_code, with_data_box, with_source_url
+        cursor_mock.fetchone.return_value = (100, 80, 90, 85, 70, 60, 55, 50, 45)
         mock_conn.cursor.return_value.__enter__.return_value = cursor_mock
 
         repo = DocumentRepository(mock_conn)
@@ -287,6 +289,9 @@ class TestRepositoryMethods:
         assert stats["total"] == 100
         assert stats["with_edesky_id"] == 80
         assert stats["with_ico"] == 90
+        assert stats["with_municipality_code"] == 55
+        assert stats["with_data_box"] == 50
+        assert stats["with_source_url"] == 45
 
     def test_get_notice_board_stats_empty(self, mock_conn: MagicMock) -> None:
         """Test getting stats when no boards exist."""

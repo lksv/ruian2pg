@@ -555,6 +555,8 @@ class DocumentRepository:
     def get_notice_boards_by_ico(self, ico: str) -> list[NoticeBoard]:
         """Find all notice boards with given ICO.
 
+        Handles ICO with or without leading zeros (e.g., "00231401" matches "231401").
+
         Note: One organization (ICO) may have multiple notice boards.
 
         Args:
@@ -563,6 +565,9 @@ class DocumentRepository:
         Returns:
             List of NoticeBoard objects (may be empty or have multiple entries).
         """
+        # Normalize ICO by removing leading zeros for comparison
+        ico_normalized = ico.lstrip("0") if ico else ""
+
         with self.conn.cursor() as cur:
             cur.execute(
                 """
@@ -571,10 +576,10 @@ class DocumentRepository:
                        nuts3_id, nuts3_name, nuts4_id, nuts4_name,
                        edesky_parent_id, edesky_parent_name, data_box_id
                 FROM notice_boards
-                WHERE ico = %s
+                WHERE LTRIM(ico, '0') = %s
                 ORDER BY name
                 """,
-                (ico,),
+                (ico_normalized,),
             )
             return [
                 NoticeBoard(
@@ -809,7 +814,10 @@ class DocumentRepository:
                     COUNT(ico) AS with_ico,
                     COUNT(edesky_url) AS with_edesky_url,
                     COUNT(nuts3_name) AS with_nuts3,
-                    COUNT(nuts4_name) AS with_nuts4
+                    COUNT(nuts4_name) AS with_nuts4,
+                    COUNT(municipality_code) AS with_municipality_code,
+                    COUNT(data_box_id) AS with_data_box,
+                    COUNT(source_url) AS with_source_url
                 FROM notice_boards
                 """
             )
@@ -822,6 +830,9 @@ class DocumentRepository:
                     "with_edesky_url": 0,
                     "with_nuts3": 0,
                     "with_nuts4": 0,
+                    "with_municipality_code": 0,
+                    "with_data_box": 0,
+                    "with_source_url": 0,
                 }
             return {
                 "total": row[0],
@@ -830,7 +841,322 @@ class DocumentRepository:
                 "with_edesky_url": row[3],
                 "with_nuts3": row[4],
                 "with_nuts4": row[5],
+                "with_municipality_code": row[6],
+                "with_data_box": row[7],
+                "with_source_url": row[8],
             }
+
+    def create_notice_board_from_edesky(
+        self,
+        edesky_id: int,
+        name: str,
+        category: str | None = None,
+        ico: str | None = None,
+        nuts3_id: int | None = None,
+        nuts3_name: str | None = None,
+        nuts4_id: int | None = None,
+        nuts4_name: str | None = None,
+        parent_id: int | None = None,
+        parent_name: str | None = None,
+        url: str | None = None,
+        latitude: float | None = None,
+        longitude: float | None = None,
+    ) -> int:
+        """Create a new notice board from eDesky data (INSERT only, no upsert).
+
+        Used for clean imports where eDesky is the primary source.
+        Raises an exception if the edesky_id already exists.
+
+        Args:
+            edesky_id: eDesky board ID (must be unique).
+            name: Board name.
+            category: Board category (obec, mesto, kraj, etc.).
+            ico: Organization IČO.
+            nuts3_id: Region ID.
+            nuts3_name: Region name.
+            nuts4_id: District ID.
+            nuts4_name: District name.
+            parent_id: Parent board ID.
+            parent_name: Parent board name.
+            url: Board URL.
+            latitude: Latitude coordinate.
+            longitude: Longitude coordinate.
+
+        Returns:
+            Notice board ID.
+
+        Raises:
+            psycopg2.IntegrityError: If edesky_id already exists.
+        """
+        edesky_url = f"https://edesky.cz/desky/{edesky_id}"
+
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO notice_boards (
+                    name, edesky_id, edesky_url, edesky_category, ico,
+                    nuts3_id, nuts3_name, nuts4_id, nuts4_name,
+                    edesky_parent_id, edesky_parent_name,
+                    source_url, latitude, longitude,
+                    created_at, updated_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s,
+                    NOW(), NOW()
+                )
+                RETURNING id
+                """,
+                (
+                    name,
+                    edesky_id,
+                    edesky_url,
+                    category,
+                    ico,
+                    nuts3_id,
+                    nuts3_name,
+                    nuts4_id,
+                    nuts4_name,
+                    parent_id,
+                    parent_name,
+                    url,
+                    latitude,
+                    longitude,
+                ),
+            )
+            result = cur.fetchone()
+            board_id: int = result[0] if result else 0
+
+        self.conn.commit()
+        return board_id
+
+    def find_notice_board_by_name_district(
+        self,
+        name: str,
+        district: str | None = None,
+    ) -> NoticeBoard | None:
+        """Find a single notice board by name and optionally district.
+
+        Handles common prefixes like "Obec ", "Město ", "Městys " that
+        eDesky uses but Česko.Digital doesn't.
+
+        Also handles city district (městské části) naming differences:
+        - "Brno-Medlánky" → "MČ Brno - Medlánky"
+        - "Praha 1" → "MČ Praha 1"
+        - "Pardubice I" → "MČ Pardubice I - střed"
+
+        Args:
+            name: Board name to search for (case-insensitive).
+            district: Optional district name (address_district field) to filter by.
+
+        Returns:
+            NoticeBoard if exactly one match found, None otherwise.
+        """
+        import re
+
+        # Common prefixes used by eDesky
+        prefixes = ["Obec ", "Město ", "Městys ", "Statutární město ", "MČ "]
+
+        # Generate name variants: original + with each prefix
+        name_variants = [name] + [f"{prefix}{name}" for prefix in prefixes]
+
+        # Handle city district naming patterns
+        # Brno: "Brno-X" or "Brno – X" → "MČ Brno - X"
+        brno_match = re.match(r"^Brno[\s\-–]+(.+)$", name, re.IGNORECASE)
+        if brno_match:
+            district_name = brno_match.group(1).strip()
+            name_variants.append(f"MČ Brno - {district_name}")
+            # Also try without MČ prefix
+            name_variants.append(f"Brno - {district_name}")
+
+        # Praha: "Praha X" or "Praha-X" → "MČ Praha X" or "MČ Praha - X"
+        praha_match = re.match(r"^Praha[\s\-–]+(.+)$", name, re.IGNORECASE)
+        if praha_match:
+            district_name = praha_match.group(1).strip()
+            name_variants.append(f"MČ Praha {district_name}")
+            name_variants.append(f"MČ Praha - {district_name}")
+            name_variants.append(f"Městská část Praha {district_name}")
+
+        # Ostrava: "Ostrava-X" → "MČ Ostrava - X" or just name
+        ostrava_match = re.match(r"^Ostrava[\s\-–]+(.+)$", name, re.IGNORECASE)
+        if ostrava_match:
+            district_name = ostrava_match.group(1).strip()
+            name_variants.append(f"MČ Ostrava - {district_name}")
+            name_variants.append(f"MČ {district_name}")  # Some Ostrava parts have just "MČ Poruba"
+
+        # Pardubice: "Pardubice I" → "MČ Pardubice I - střed"
+        pardubice_match = re.match(r"^Pardubice\s+([IVX]+\.?)$", name, re.IGNORECASE)
+        if pardubice_match:
+            roman = pardubice_match.group(1).rstrip(".")
+            name_variants.append(f"MČ Pardubice {roman}")
+            # eDesky has longer names like "MČ Pardubice I - střed"
+            name_variants.append(f"MČ Pardubice {roman} -")  # Prefix match
+
+        # Plzeň: "Plzeň X" → "MČ Plzeň X"
+        plzen_match = re.match(r"^Plzeň\s+(.+)$", name, re.IGNORECASE)
+        if plzen_match:
+            district_name = plzen_match.group(1).strip()
+            name_variants.append(f"MČ Plzeň {district_name}")
+
+        # Ústí nad Labem: "Ústí nad Labem – X" → "MČ Ústí nad Labem - X"
+        usti_match = re.match(r"^Ústí nad Labem[\s\-–]+(.+)$", name, re.IGNORECASE)
+        if usti_match:
+            district_name = usti_match.group(1).strip()
+            name_variants.append(f"MČ Ústí nad Labem - {district_name}")
+
+        with self.conn.cursor() as cur:
+            if district:
+                # Try matching by name + address_district first
+                cur.execute(
+                    """
+                    SELECT id, municipality_code, name, ico, edesky_url,
+                           edesky_id, edesky_category,
+                           nuts3_id, nuts3_name, nuts4_id, nuts4_name,
+                           edesky_parent_id, edesky_parent_name, data_box_id,
+                           source_url, address_district
+                    FROM notice_boards
+                    WHERE LOWER(name) = ANY(%s)
+                      AND (LOWER(address_district) = LOWER(%s) OR LOWER(nuts4_name) = LOWER(%s))
+                    """,
+                    ([n.lower() for n in name_variants], district, district),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT id, municipality_code, name, ico, edesky_url,
+                           edesky_id, edesky_category,
+                           nuts3_id, nuts3_name, nuts4_id, nuts4_name,
+                           edesky_parent_id, edesky_parent_name, data_box_id,
+                           source_url, address_district
+                    FROM notice_boards
+                    WHERE LOWER(name) = ANY(%s)
+                    """,
+                    ([n.lower() for n in name_variants],),
+                )
+
+            rows = cur.fetchall()
+
+            # Return None if no match or ambiguous (multiple matches)
+            if len(rows) != 1:
+                return None
+
+            row = rows[0]
+            return NoticeBoard(
+                id=row[0],
+                municipality_code=row[1],
+                name=row[2],
+                ico=row[3],
+                edesky_url=row[4],
+                edesky_id=row[5],
+                edesky_category=row[6],
+                nuts3_id=row[7],
+                nuts3_name=row[8],
+                nuts4_id=row[9],
+                nuts4_name=row[10],
+                edesky_parent_id=row[11],
+                edesky_parent_name=row[12],
+                data_box_id=row[13],
+                source_url=row[14],
+                address_district=row[15],
+            )
+
+    def enrich_notice_board(
+        self,
+        board_id: int,
+        municipality_code: int | None = None,
+        source_url: str | None = None,
+        ofn_json_url: str | None = None,
+        data_box_id: str | None = None,
+        address_street: str | None = None,
+        address_city: str | None = None,
+        address_district: str | None = None,
+        address_postal_code: str | None = None,
+        address_region: str | None = None,
+        address_point_id: int | None = None,
+        abbreviation: str | None = None,
+        emails: list[str] | None = None,
+        legal_form_code: int | None = None,
+        legal_form_label: str | None = None,
+        board_type: str | None = None,
+        nutslau: str | None = None,
+        coat_of_arms_url: str | None = None,
+    ) -> bool:
+        """Enrich existing board with Česko.Digital data, only fills NULL fields.
+
+        Used during the enrichment phase where we update existing boards
+        (created from eDesky) with additional data from Česko.Digital.
+
+        Args:
+            board_id: Database ID of the notice board to update.
+            municipality_code: RUIAN municipality code.
+            source_url: Official URL of the notice board.
+            ofn_json_url: OFN JSON URL.
+            data_box_id: Data box identifier.
+            address_*: Address fields.
+            abbreviation: Short name.
+            emails: Email addresses.
+            legal_form_code: Legal form code.
+            legal_form_label: Legal form label.
+            board_type: Board type (obec, mesto, etc.).
+            nutslau: NUTS/LAU code.
+            coat_of_arms_url: URL to coat of arms image.
+
+        Returns:
+            True if any field was updated, False otherwise.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE notice_boards SET
+                    municipality_code = COALESCE(municipality_code, %s),
+                    source_url = COALESCE(source_url, %s),
+                    ofn_json_url = COALESCE(ofn_json_url, %s),
+                    data_box_id = COALESCE(data_box_id, %s),
+                    address_street = COALESCE(address_street, %s),
+                    address_city = COALESCE(address_city, %s),
+                    address_district = COALESCE(address_district, %s),
+                    address_postal_code = COALESCE(address_postal_code, %s),
+                    address_region = COALESCE(address_region, %s),
+                    address_point_id = COALESCE(address_point_id, %s),
+                    abbreviation = COALESCE(abbreviation, %s),
+                    emails = CASE
+                        WHEN emails IS NULL OR emails = '{}'::text[] THEN %s
+                        ELSE emails
+                    END,
+                    legal_form_code = COALESCE(legal_form_code, %s),
+                    legal_form_label = COALESCE(legal_form_label, %s),
+                    board_type = COALESCE(board_type, %s),
+                    nutslau = COALESCE(nutslau, %s),
+                    coat_of_arms_url = COALESCE(coat_of_arms_url, %s),
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (
+                    municipality_code,
+                    source_url,
+                    ofn_json_url,
+                    data_box_id,
+                    address_street,
+                    address_city,
+                    address_district,
+                    address_postal_code,
+                    address_region,
+                    address_point_id,
+                    abbreviation,
+                    emails,
+                    legal_form_code,
+                    legal_form_label,
+                    board_type,
+                    nutslau,
+                    coat_of_arms_url,
+                    board_id,
+                ),
+            )
+            updated: bool = cur.rowcount > 0
+
+        self.conn.commit()
+        return updated
 
     def _serialize_metadata(self, metadata: dict[str, Any]) -> str | None:
         """Serialize metadata dict to JSON string for storage."""

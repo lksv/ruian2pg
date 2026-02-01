@@ -75,112 +75,52 @@
     group: "{{ app_user }}"
     mode: "0755"
 
-- name: Copy migration files
-  ansible.builtin.copy:
-    src: "{{ item }}"
-    dest: "/tmp/{{ item | basename }}"
-    mode: "0644"
-  loop:
-    - "{{ playbook_dir }}/../files/sql/setup_notice_boards_db.sql"
-    - "{{ playbook_dir }}/../files/sql/migrate_notice_boards_v2.sql"
-    - "{{ playbook_dir }}/../files/sql/migrate_notice_boards_v3.sql"
-    - "{{ playbook_dir }}/../files/sql/migrate_notice_boards_v4.sql"
-    - "{{ playbook_dir }}/../files/sql/setup_indexes.sql"
+# Dynamic migration discovery - uses scripts/ from cloned repo
+# Order: setup_notice_boards_db.sql first, then migrate_*.sql sorted, then setup_indexes.sql last
+- name: Find all migration files
+  ansible.builtin.find:
+    paths: "{{ app_dir }}/scripts"
+    patterns:
+      - "setup_notice_boards_db.sql"
+      - "migrate_notice_boards_*.sql"
+      - "setup_indexes.sql"
+  register: migration_files
   tags: [migrations]
 
-- name: Apply migration - setup_notice_boards_db.sql
+- name: Build ordered migration list
+  ansible.builtin.set_fact:
+    ordered_migrations: >-
+      {{
+        (migration_files.files | selectattr('path', 'search', 'setup_notice_boards_db.sql') | list) +
+        (migration_files.files | selectattr('path', 'search', 'migrate_notice_boards_') | sort(attribute='path') | list) +
+        (migration_files.files | selectattr('path', 'search', 'setup_indexes.sql') | list)
+      }}
+  tags: [migrations]
+
+- name: Display migrations to apply
+  ansible.builtin.debug:
+    msg: "Found {{ ordered_migrations | length }} migration files: {{ ordered_migrations | map(attribute='path') | map('basename') | list }}"
+  tags: [migrations]
+
+- name: Apply migrations
   ansible.builtin.shell: |
-    docker exec -i {{ postgres_container }} psql -U {{ db_user }} -d {{ db_name }} < /tmp/setup_notice_boards_db.sql
+    docker exec -i {{ postgres_container }} psql -U {{ db_user }} -d {{ db_name }} < {{ item.path }}
   args:
-    creates: "{{ app_home }}/.migrations/setup_notice_boards_db.done"
-  register: migration_1
+    creates: "{{ app_home }}/.migrations/{{ item.path | basename }}.done"
+  loop: "{{ ordered_migrations }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: migration_results
   tags: [migrations]
 
-- name: Mark migration 1 as done
+- name: Mark migrations as done
   ansible.builtin.file:
-    path: "{{ app_home }}/.migrations/setup_notice_boards_db.done"
+    path: "{{ app_home }}/.migrations/{{ item.item.path | basename }}.done"
     state: touch
     owner: "{{ app_user }}"
     mode: "0644"
-  when: migration_1.changed
-  tags: [migrations]
-
-- name: Apply migration - migrate_notice_boards_v2.sql
-  ansible.builtin.shell: |
-    docker exec -i {{ postgres_container }} psql -U {{ db_user }} -d {{ db_name }} < /tmp/migrate_notice_boards_v2.sql
-  args:
-    creates: "{{ app_home }}/.migrations/migrate_notice_boards_v2.done"
-  register: migration_2
-  tags: [migrations]
-
-- name: Mark migration 2 as done
-  ansible.builtin.file:
-    path: "{{ app_home }}/.migrations/migrate_notice_boards_v2.done"
-    state: touch
-    owner: "{{ app_user }}"
-    mode: "0644"
-  when: migration_2.changed
-  tags: [migrations]
-
-- name: Apply migration - migrate_notice_boards_v3.sql
-  ansible.builtin.shell: |
-    docker exec -i {{ postgres_container }} psql -U {{ db_user }} -d {{ db_name }} < /tmp/migrate_notice_boards_v3.sql
-  args:
-    creates: "{{ app_home }}/.migrations/migrate_notice_boards_v3.done"
-  register: migration_3
-  tags: [migrations]
-
-- name: Mark migration 3 as done
-  ansible.builtin.file:
-    path: "{{ app_home }}/.migrations/migrate_notice_boards_v3.done"
-    state: touch
-    owner: "{{ app_user }}"
-    mode: "0644"
-  when: migration_3.changed
-  tags: [migrations]
-
-- name: Apply migration - migrate_notice_boards_v4.sql
-  ansible.builtin.shell: |
-    docker exec -i {{ postgres_container }} psql -U {{ db_user }} -d {{ db_name }} < /tmp/migrate_notice_boards_v4.sql
-  args:
-    creates: "{{ app_home }}/.migrations/migrate_notice_boards_v4.done"
-  register: migration_4
-  tags: [migrations]
-
-- name: Mark migration 4 as done
-  ansible.builtin.file:
-    path: "{{ app_home }}/.migrations/migrate_notice_boards_v4.done"
-    state: touch
-    owner: "{{ app_user }}"
-    mode: "0644"
-  when: migration_4.changed
-  tags: [migrations]
-
-- name: Apply indexes - setup_indexes.sql
-  ansible.builtin.shell: |
-    docker exec -i {{ postgres_container }} psql -U {{ db_user }} -d {{ db_name }} < /tmp/setup_indexes.sql
-  args:
-    creates: "{{ app_home }}/.migrations/setup_indexes.done"
-  register: migration_indexes
-  tags: [migrations]
-
-- name: Mark indexes as done
-  ansible.builtin.file:
-    path: "{{ app_home }}/.migrations/setup_indexes.done"
-    state: touch
-    owner: "{{ app_user }}"
-    mode: "0644"
-  when: migration_indexes.changed
-  tags: [migrations]
-
-- name: Clean up temporary migration files
-  ansible.builtin.file:
-    path: "/tmp/{{ item }}"
-    state: absent
-  loop:
-    - setup_notice_boards_db.sql
-    - migrate_notice_boards_v2.sql
-    - migrate_notice_boards_v3.sql
-    - migrate_notice_boards_v4.sql
-    - setup_indexes.sql
+  loop: "{{ migration_results.results }}"
+  loop_control:
+    label: "{{ item.item.path | basename }}"
+  when: item.changed
   tags: [migrations]
