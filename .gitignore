@@ -3,6 +3,8 @@ data/*.zip
 data/*.xml
 data/*.gz
 data/*.json
+data/attachments/
+data/documents/
 
 # Python
 __pycache__/
