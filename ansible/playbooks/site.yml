@@ -24,6 +24,9 @@
     - role: docker
       tags: [docker]
 
+    - role: ruian_app
+      tags: [ruian_app, app]
+
     - role: postgresql
       tags: [postgresql, database, db]
 
@@ -36,9 +39,6 @@
     - role: certbot
       tags: [certbot, ssl, https]
       when: ssl_enabled | default(false)
-
-    - role: ruian_app
-      tags: [ruian_app, app]
 
   post_tasks:
     - name: Display deployment summary

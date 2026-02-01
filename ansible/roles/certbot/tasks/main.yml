@@ -80,12 +80,5 @@
     enabled: true
     state: started
 
-- name: Test certificate renewal (dry run)
-  ansible.builtin.command: certbot renew --dry-run
-  changed_when: false
-  register: certbot_renewal_test
-  failed_when: false
-
-- name: Display renewal test result
-  ansible.builtin.debug:
-    msg: "Certificate renewal test: {{ 'PASSED' if certbot_renewal_test.rc == 0 else 'FAILED - check certbot logs' }}"
+# Dry-run test removed - takes too long for regular deployments
+# Run manually if needed: sudo certbot renew --dry-run
