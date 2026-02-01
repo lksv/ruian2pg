@@ -1,0 +1,138 @@
+---
+# Maintenance playbook - backup, updates, container management
+#
+# Usage:
+#   ansible-playbook playbooks/maintenance.yml --tags backup
+#   ansible-playbook playbooks/maintenance.yml --tags update
+#   ansible-playbook playbooks/maintenance.yml --tags restart
+
+- name: RUIAN2PG Maintenance
+  hosts: production
+  become: true
+
+  vars:
+    backup_dir: "{{ app_home }}/backups"
+
+  tasks:
+    # ==================== BACKUP ====================
+    - name: Create backup directory
+      ansible.builtin.file:
+        path: "{{ backup_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: "0750"
+      tags: [backup]
+
+    - name: Backup PostgreSQL database
+      ansible.builtin.shell: |
+        docker exec {{ postgres_container }} pg_dump -U {{ db_user }} -d {{ db_name }} | gzip > {{ backup_dir }}/ruian_$(date +%Y%m%d_%H%M%S).sql.gz
+      args:
+        executable: /bin/bash
+      tags: [backup]
+
+    - name: Remove old backups (keep last 7)
+      ansible.builtin.shell: |
+        ls -t {{ backup_dir }}/ruian_*.sql.gz 2>/dev/null | tail -n +8 | xargs -r rm
+      args:
+        executable: /bin/bash
+      changed_when: false
+      tags: [backup]
+
+    - name: List backups
+      ansible.builtin.find:
+        paths: "{{ backup_dir }}"
+        patterns: "ruian_*.sql.gz"
+      register: backup_files
+      tags: [backup]
+
+    - name: Display backup info
+      ansible.builtin.debug:
+        msg: "Backups: {{ backup_files.files | map(attribute='path') | list }}"
+      tags: [backup]
+
+    # ==================== UPDATE CONTAINERS ====================
+    - name: Pull latest Docker images
+      community.docker.docker_image:
+        name: "{{ item }}"
+        source: pull
+        force_source: true
+      loop:
+        - "{{ postgres_image }}"
+        - "{{ martin_image }}"
+      tags: [update]
+
+    - name: Recreate Martin container with latest image
+      community.docker.docker_container:
+        name: "{{ martin_container }}"
+        image: "{{ martin_image }}"
+        state: started
+        restart: true
+        recreate: true
+        networks:
+          - name: "{{ docker_network }}"
+        ports:
+          - "127.0.0.1:{{ martin_port }}:3000"
+        volumes:
+          - "{{ app_dir }}/martin/martin.yaml:/config.yaml:ro"
+        command: "--config /config.yaml"
+      tags: [update]
+
+    # ==================== RESTART ====================
+    - name: Restart PostgreSQL container
+      community.docker.docker_container:
+        name: "{{ postgres_container }}"
+        state: started
+        restart: true
+      tags: [restart, restart-postgres]
+
+    - name: Restart Martin container
+      community.docker.docker_container:
+        name: "{{ martin_container }}"
+        state: started
+        restart: true
+      tags: [restart, restart-martin]
+
+    - name: Restart Nginx
+      ansible.builtin.service:
+        name: nginx
+        state: restarted
+      tags: [restart, restart-nginx]
+
+    # ==================== STATUS ====================
+    - name: Get container status
+      ansible.builtin.shell: docker ps --format "table {{'{{'}}.Names{{'}}'}}\t{{'{{'}}.Status{{'}}'}}\t{{'{{'}}.Ports{{'}}'}}"
+      register: docker_status
+      changed_when: false
+      tags: [status]
+
+    - name: Display container status
+      ansible.builtin.debug:
+        msg: "{{ docker_status.stdout_lines }}"
+      tags: [status]
+
+    - name: Check Nginx status
+      ansible.builtin.service:
+        name: nginx
+        state: started
+      check_mode: true
+      register: nginx_status
+      tags: [status]
+
+    - name: Display Nginx status
+      ansible.builtin.debug:
+        msg: "Nginx is {{ 'running' if not nginx_status.changed else 'stopped' }}"
+      tags: [status]
+
+    # ==================== CLEANUP ====================
+    - name: Remove unused Docker images
+      ansible.builtin.shell: docker image prune -f
+      register: prune_result
+      changed_when: "'Total reclaimed space' in prune_result.stdout"
+      tags: [cleanup]
+
+    - name: Remove unused Docker volumes
+      ansible.builtin.shell: docker volume prune -f
+      register: volume_prune
+      changed_when: "'Total reclaimed space' in volume_prune.stdout"
+      tags: [cleanup]

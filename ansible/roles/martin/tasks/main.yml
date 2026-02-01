@@ -1,0 +1,44 @@
+---
+# Martin role - tile server container
+
+- name: Create Martin config directory
+  ansible.builtin.file:
+    path: "{{ app_dir }}/martin"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0755"
+
+- name: Deploy Martin configuration
+  ansible.builtin.template:
+    src: martin.yaml.j2
+    dest: "{{ app_dir }}/martin/martin.yaml"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0644"
+  notify: Restart Martin
+
+- name: Start Martin container
+  community.docker.docker_container:
+    name: "{{ martin_container }}"
+    image: "{{ martin_image }}"
+    state: started
+    restart_policy: unless-stopped
+    networks:
+      - name: "{{ docker_network }}"
+    ports:
+      - "127.0.0.1:{{ martin_port }}:3000"
+    volumes:
+      - "{{ app_dir }}/martin/martin.yaml:/config.yaml:ro"
+    command: "--config /config.yaml"
+  register: martin_container_result
+
+- name: Wait for Martin to be healthy
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ martin_port }}/health"
+    method: GET
+    status_code: 200
+  register: martin_health
+  retries: 30
+  delay: 2
+  until: martin_health.status == 200

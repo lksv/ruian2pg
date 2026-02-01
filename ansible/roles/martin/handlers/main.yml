@@ -1,0 +1,6 @@
+---
+- name: Restart Martin
+  community.docker.docker_container:
+    name: "{{ martin_container }}"
+    state: started
+    restart: true

@@ -1,0 +1,108 @@
+---
+# Restore playbook - restores PostgreSQL database from backup
+#
+# Usage:
+#   # List available backups
+#   ansible-playbook playbooks/restore.yml --tags list
+#
+#   # Restore specific backup (REQUIRED: specify backup_file)
+#   ansible-playbook playbooks/restore.yml -e backup_file=ruian_20240101_120000.sql.gz
+
+- name: Restore PostgreSQL database
+  hosts: production
+  become: true
+
+  vars:
+    backup_dir: "{{ app_home }}/backups"
+
+  tasks:
+    - name: List available backups
+      ansible.builtin.find:
+        paths: "{{ backup_dir }}"
+        patterns: "*.sql.gz,*.sql.zst,*.sql"
+      register: available_backups
+      tags: [always, list]
+
+    - name: Display available backups
+      ansible.builtin.debug:
+        msg: |
+          Available backups in {{ backup_dir }}:
+          {% for f in available_backups.files | sort(attribute='mtime') | reverse %}
+          - {{ f.path | basename }} ({{ (f.size / 1024 / 1024) | round(2) }} MB, {{ '%Y-%m-%d %H:%M' | strftime(f.mtime) }})
+          {% endfor %}
+      tags: [always, list]
+
+    - name: Verify backup_file is specified
+      ansible.builtin.fail:
+        msg: |
+          ERROR: You must specify backup_file to restore.
+          Usage: ansible-playbook playbooks/restore.yml -e backup_file=ruian_XXXXXXXX_XXXXXX.sql.gz
+      when:
+        - backup_file is not defined
+        - "'list' not in ansible_run_tags"
+      tags: [restore]
+
+    - name: Check backup file exists
+      ansible.builtin.stat:
+        path: "{{ backup_dir }}/{{ backup_file }}"
+      register: backup_stat
+      when: backup_file is defined
+      tags: [restore]
+
+    - name: Fail if backup file not found
+      ansible.builtin.fail:
+        msg: "Backup file not found: {{ backup_dir }}/{{ backup_file }}"
+      when:
+        - backup_file is defined
+        - not backup_stat.stat.exists
+      tags: [restore]
+
+    - name: Confirm restore operation
+      ansible.builtin.pause:
+        prompt: |
+          WARNING: This will DROP and recreate the database!
+          All current data will be replaced with backup: {{ backup_file }}
+
+          Press ENTER to continue or Ctrl+C to abort
+      when: backup_file is defined
+      tags: [restore]
+
+    - name: Drop and recreate database
+      ansible.builtin.shell: |
+        docker exec {{ postgres_container }} psql -U {{ db_user }} -d postgres -c "
+          SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{{ db_name }}' AND pid <> pg_backend_pid();
+          DROP DATABASE IF EXISTS {{ db_name }};
+          CREATE DATABASE {{ db_name }} OWNER {{ db_user }};
+        "
+      when: backup_file is defined
+      tags: [restore]
+
+    - name: Determine decompression command
+      ansible.builtin.set_fact:
+        decompress_cmd: >-
+          {%- if backup_file.endswith('.zst') -%}
+          zstd -d -c
+          {%- elif backup_file.endswith('.gz') -%}
+          gunzip -c
+          {%- else -%}
+          cat
+          {%- endif -%}
+      when: backup_file is defined
+      tags: [restore]
+
+    - name: Restore database from backup
+      ansible.builtin.shell: |
+        {{ decompress_cmd }} {{ backup_dir }}/{{ backup_file }} | docker exec -i {{ postgres_container }} psql -U {{ db_user }} -d {{ db_name }}
+      args:
+        executable: /bin/bash
+      when: backup_file is defined
+      register: restore_result
+      tags: [restore]
+
+    - name: Display restore result
+      ansible.builtin.debug:
+        msg: "Database restored successfully from {{ backup_file }}"
+      when:
+        - backup_file is defined
+        - restore_result.rc == 0
+      tags: [restore]

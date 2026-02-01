@@ -1,0 +1,76 @@
+---
+# Backup playbook - creates PostgreSQL database backup
+#
+# Usage:
+#   ansible-playbook playbooks/backup.yml
+#   ansible-playbook playbooks/backup.yml -e backup_name=before_upgrade
+#   ansible-playbook playbooks/backup.yml -e backup_compression=zstd
+
+- name: Backup PostgreSQL database
+  hosts: production
+  become: true
+
+  vars:
+    backup_dir: "{{ app_home }}/backups"
+    backup_name: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+    backup_retention_count: 7
+    # Compression: pigz (parallel gzip), zstd, gzip, none
+    backup_compression: pigz
+
+  tasks:
+    - name: Install compression tools
+      ansible.builtin.apt:
+        name:
+          - pigz
+          - zstd
+        state: present
+      when: backup_compression in ['pigz', 'zstd']
+
+    - name: Create backup directory
+      ansible.builtin.file:
+        path: "{{ backup_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: "0750"
+
+    - name: Set compression command and extension
+      ansible.builtin.set_fact:
+        compress_cmd: "{{ {'pigz': 'pigz -p $(nproc)', 'zstd': 'zstd -T0 -3', 'gzip': 'gzip', 'none': 'cat'}[backup_compression] }}"
+        compress_ext: "{{ {'pigz': '.gz', 'zstd': '.zst', 'gzip': '.gz', 'none': ''}[backup_compression] }}"
+
+    - name: Create database backup
+      ansible.builtin.shell: |
+        docker exec {{ postgres_container }} pg_dump -U {{ db_user }} -d {{ db_name }} | {{ compress_cmd }} > {{ backup_dir }}/{{ backup_prefix | default('ruian') }}_{{ backup_name }}.sql{{ compress_ext }}
+      args:
+        executable: /bin/bash
+      register: backup_result
+
+    - name: Get backup file size
+      ansible.builtin.stat:
+        path: "{{ backup_dir }}/{{ backup_prefix | default('ruian') }}_{{ backup_name }}.sql{{ compress_ext }}"
+      register: backup_file
+
+    - name: Display backup info
+      ansible.builtin.debug:
+        msg: |
+          Backup created: {{ backup_dir }}/{{ backup_prefix | default('ruian') }}_{{ backup_name }}.sql{{ compress_ext }}
+          Size: {{ (backup_file.stat.size / 1024 / 1024) | round(2) }} MB
+          Compression: {{ backup_compression }} ({{ compress_cmd }})
+
+    - name: List all backups
+      ansible.builtin.find:
+        paths: "{{ backup_dir }}"
+        patterns: "*.sql.gz,*.sql.zst,*.sql"
+      register: all_backups
+
+    - name: Remove old backups (keep last {{ backup_retention_count }})
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ (all_backups.files | sort(attribute='mtime') | reverse | list)[backup_retention_count:] }}"
+      when: all_backups.files | length > backup_retention_count
+
+    - name: Display remaining backups
+      ansible.builtin.debug:
+        msg: "Backups ({{ all_backups.files | length }} total, keeping {{ backup_retention_count }}): {{ all_backups.files | map(attribute='path') | map('basename') | list }}"

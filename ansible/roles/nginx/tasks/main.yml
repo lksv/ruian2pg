@@ -1,0 +1,60 @@
+---
+# Nginx role - reverse proxy for Martin and static file serving
+
+- name: Install Nginx
+  ansible.builtin.apt:
+    name: nginx
+    state: present
+
+- name: Ensure home directory is accessible by nginx
+  ansible.builtin.file:
+    path: "{{ item }}"
+    mode: "o+x"
+  loop:
+    - "{{ app_home }}"
+    - "{{ app_dir }}"
+
+- name: Create web directory
+  ansible.builtin.file:
+    path: "{{ nginx_root }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0755"
+
+- name: Ensure web files are readable by nginx
+  ansible.builtin.file:
+    path: "{{ nginx_root }}"
+    state: directory
+    recurse: true
+    mode: "o+r"
+
+- name: Remove default Nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload Nginx
+
+- name: Deploy Nginx configuration
+  ansible.builtin.template:
+    src: ruian.conf.j2
+    dest: /etc/nginx/sites-available/ruian.conf
+    mode: "0644"
+  notify: Reload Nginx
+
+- name: Enable Nginx site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/ruian.conf
+    dest: /etc/nginx/sites-enabled/ruian.conf
+    state: link
+  notify: Reload Nginx
+
+- name: Test Nginx configuration
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: Start and enable Nginx
+  ansible.builtin.service:
+    name: nginx
+    state: started
+    enabled: true

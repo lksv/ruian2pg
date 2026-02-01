@@ -1,0 +1,21 @@
+# Ansible vault password file
+.vault_pass
+*.vault_pass
+
+# Encrypted vault files should be committed, but not plain text versions
+# vault.yml.plaintext
+
+# Retry files
+*.retry
+
+# Local inventory overrides
+inventory/local.yml
+inventory/local/
+
+# SSH keys
+*.pem
+*.key
+
+# Temporary files
+*.tmp
+*.bak

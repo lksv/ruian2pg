@@ -1,0 +1,69 @@
+---
+# RUIAN application role - clone repo, install dependencies
+
+- name: Check if uv is installed
+  ansible.builtin.command: which uv
+  register: uv_check
+  ignore_errors: true
+  changed_when: false
+
+- name: Install uv package manager
+  ansible.builtin.shell: |
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+  args:
+    executable: /bin/bash
+    creates: "{{ app_home }}/.local/bin/uv"
+  become: true
+  become_user: "{{ app_user }}"
+  when: uv_check.rc != 0
+
+- name: Add uv to PATH in bashrc
+  ansible.builtin.lineinfile:
+    path: "{{ app_home }}/.bashrc"
+    line: 'export PATH="$HOME/.local/bin:$PATH"'
+    create: true
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0644"
+
+- name: Clone or update RUIAN repository
+  ansible.builtin.git:
+    repo: "{{ git_repo }}"
+    dest: "{{ app_dir }}"
+    version: "{{ git_branch }}"
+    force: false
+    update: true
+  become: true
+  become_user: "{{ app_user }}"
+  register: git_result
+
+- name: Install Python dependencies with uv
+  ansible.builtin.shell: |
+    export PATH="$HOME/.local/bin:$PATH"
+    cd {{ app_dir }}
+    uv sync
+  args:
+    executable: /bin/bash
+  become: true
+  become_user: "{{ app_user }}"
+  when: git_result.changed
+  register: uv_sync
+
+- name: Create environment file
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ app_dir }}/.env"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0600"
+
+- name: Create data directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0755"
+  loop:
+    - "{{ data_dir }}"
+    - "{{ data_dir }}/attachments"

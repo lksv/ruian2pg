@@ -1,0 +1,186 @@
+---
+# PostgreSQL role - PostGIS container and migrations
+# Preserves existing database data when preserve_existing_database is true
+
+- name: Check if PostgreSQL container exists
+  community.docker.docker_container_info:
+    name: "{{ postgres_container }}"
+  register: postgres_container_info
+
+- name: Display existing container status
+  ansible.builtin.debug:
+    msg: "PostgreSQL container exists: {{ postgres_container_info.exists }}, running: {{ postgres_container_info.container.State.Running | default(false) }}"
+  when: postgres_container_info.exists
+
+- name: Create PostgreSQL data volume
+  community.docker.docker_volume:
+    name: "{{ postgres_volume }}"
+    state: present
+
+# If container exists and preserve_existing_database is true, just ensure it's running and in network
+- name: Ensure existing PostgreSQL container is running
+  community.docker.docker_container:
+    name: "{{ postgres_container }}"
+    state: started
+  when:
+    - postgres_container_info.exists
+    - preserve_existing_database | default(true)
+
+- name: Add existing container to Docker network
+  ansible.builtin.shell: |
+    docker network connect {{ docker_network }} {{ postgres_container }} 2>/dev/null || true
+  when:
+    - postgres_container_info.exists
+    - preserve_existing_database | default(true)
+  changed_when: false
+
+# If container doesn't exist, create it
+- name: Create new PostgreSQL container
+  community.docker.docker_container:
+    name: "{{ postgres_container }}"
+    image: "{{ postgres_image }}"
+    state: started
+    restart_policy: unless-stopped
+    networks:
+      - name: "{{ docker_network }}"
+    ports:
+      - "5432:5432"
+    env:
+      POSTGRES_USER: "{{ db_user }}"
+      POSTGRES_PASSWORD: "{{ db_password }}"
+      POSTGRES_DB: "{{ db_name }}"
+    volumes:
+      - "{{ postgres_volume }}:/var/lib/postgresql"
+  when: not postgres_container_info.exists
+  register: postgres_container_result
+
+- name: Wait for PostgreSQL to be ready
+  ansible.builtin.shell: |
+    for i in $(seq 1 30); do
+      docker exec {{ postgres_container }} pg_isready -U {{ db_user }} -d {{ db_name }} && exit 0
+      sleep 2
+    done
+    exit 1
+  args:
+    executable: /bin/bash
+  changed_when: false
+  retries: 3
+  delay: 5
+
+- name: Create migrations tracking directory
+  ansible.builtin.file:
+    path: "{{ app_home }}/.migrations"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0755"
+
+- name: Copy migration files
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/tmp/{{ item | basename }}"
+    mode: "0644"
+  loop:
+    - "{{ playbook_dir }}/../files/sql/setup_notice_boards_db.sql"
+    - "{{ playbook_dir }}/../files/sql/migrate_notice_boards_v2.sql"
+    - "{{ playbook_dir }}/../files/sql/migrate_notice_boards_v3.sql"
+    - "{{ playbook_dir }}/../files/sql/migrate_notice_boards_v4.sql"
+    - "{{ playbook_dir }}/../files/sql/setup_indexes.sql"
+  tags: [migrations]
+
+- name: Apply migration - setup_notice_boards_db.sql
+  ansible.builtin.shell: |
+    docker exec -i {{ postgres_container }} psql -U {{ db_user }} -d {{ db_name }} < /tmp/setup_notice_boards_db.sql
+  args:
+    creates: "{{ app_home }}/.migrations/setup_notice_boards_db.done"
+  register: migration_1
+  tags: [migrations]
+
+- name: Mark migration 1 as done
+  ansible.builtin.file:
+    path: "{{ app_home }}/.migrations/setup_notice_boards_db.done"
+    state: touch
+    owner: "{{ app_user }}"
+    mode: "0644"
+  when: migration_1.changed
+  tags: [migrations]
+
+- name: Apply migration - migrate_notice_boards_v2.sql
+  ansible.builtin.shell: |
+    docker exec -i {{ postgres_container }} psql -U {{ db_user }} -d {{ db_name }} < /tmp/migrate_notice_boards_v2.sql
+  args:
+    creates: "{{ app_home }}/.migrations/migrate_notice_boards_v2.done"
+  register: migration_2
+  tags: [migrations]
+
+- name: Mark migration 2 as done
+  ansible.builtin.file:
+    path: "{{ app_home }}/.migrations/migrate_notice_boards_v2.done"
+    state: touch
+    owner: "{{ app_user }}"
+    mode: "0644"
+  when: migration_2.changed
+  tags: [migrations]
+
+- name: Apply migration - migrate_notice_boards_v3.sql
+  ansible.builtin.shell: |
+    docker exec -i {{ postgres_container }} psql -U {{ db_user }} -d {{ db_name }} < /tmp/migrate_notice_boards_v3.sql
+  args:
+    creates: "{{ app_home }}/.migrations/migrate_notice_boards_v3.done"
+  register: migration_3
+  tags: [migrations]
+
+- name: Mark migration 3 as done
+  ansible.builtin.file:
+    path: "{{ app_home }}/.migrations/migrate_notice_boards_v3.done"
+    state: touch
+    owner: "{{ app_user }}"
+    mode: "0644"
+  when: migration_3.changed
+  tags: [migrations]
+
+- name: Apply migration - migrate_notice_boards_v4.sql
+  ansible.builtin.shell: |
+    docker exec -i {{ postgres_container }} psql -U {{ db_user }} -d {{ db_name }} < /tmp/migrate_notice_boards_v4.sql
+  args:
+    creates: "{{ app_home }}/.migrations/migrate_notice_boards_v4.done"
+  register: migration_4
+  tags: [migrations]
+
+- name: Mark migration 4 as done
+  ansible.builtin.file:
+    path: "{{ app_home }}/.migrations/migrate_notice_boards_v4.done"
+    state: touch
+    owner: "{{ app_user }}"
+    mode: "0644"
+  when: migration_4.changed
+  tags: [migrations]
+
+- name: Apply indexes - setup_indexes.sql
+  ansible.builtin.shell: |
+    docker exec -i {{ postgres_container }} psql -U {{ db_user }} -d {{ db_name }} < /tmp/setup_indexes.sql
+  args:
+    creates: "{{ app_home }}/.migrations/setup_indexes.done"
+  register: migration_indexes
+  tags: [migrations]
+
+- name: Mark indexes as done
+  ansible.builtin.file:
+    path: "{{ app_home }}/.migrations/setup_indexes.done"
+    state: touch
+    owner: "{{ app_user }}"
+    mode: "0644"
+  when: migration_indexes.changed
+  tags: [migrations]
+
+- name: Clean up temporary migration files
+  ansible.builtin.file:
+    path: "/tmp/{{ item }}"
+    state: absent
+  loop:
+    - setup_notice_boards_db.sql
+    - migrate_notice_boards_v2.sql
+    - migrate_notice_boards_v3.sql
+    - migrate_notice_boards_v4.sql
+    - setup_indexes.sql
+  tags: [migrations]

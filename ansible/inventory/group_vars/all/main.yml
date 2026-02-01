@@ -1,0 +1,68 @@
+# Common variables for all hosts
+
+# Application settings
+app_user: lukas
+app_home: "/home/{{ app_user }}"
+app_dir: "{{ app_home }}/ruian2pg"
+data_dir: "{{ app_dir }}/data"
+
+# Git repository
+git_repo: "https://github.com/lksv/ruian2pg.git"
+git_branch: master
+
+# Database settings
+db_name: ruian
+db_user: ruian
+db_password: "{{ vault_db_password }}"  # Mapped from vault.yml
+
+# Docker settings
+docker_network: ruian-network
+postgres_container: ruian-postgis
+postgres_image: postgis/postgis:18-3.6
+postgres_volume: ruian_pgdata
+
+# Set to true to preserve existing database container (won't recreate if exists)
+# This protects existing RUIAN data from being lost
+preserve_existing_database: true
+
+martin_container: martin
+martin_image: ghcr.io/maplibre/martin
+martin_port: 3000
+
+# Nginx settings
+nginx_root: "{{ app_dir }}/web"
+
+# Timezone and locale
+timezone: Europe/Prague
+locale: cs_CZ.UTF-8
+
+# System packages
+common_packages:
+  # Basic utilities
+  - curl
+  - wget
+  - gnupg
+  - ca-certificates
+  - apt-transport-https
+  # Editors
+  - vim
+  - neovim
+  # Version control
+  - git
+  # Python
+  - python3
+  - python3-pip
+  - python3-venv
+  # RUIAN dependencies
+  - gdal-bin
+  - postgresql-client
+  # Utilities
+  - htop
+  - tmux
+  - tree
+  - jq
+  - unzip
+  - rsync
+  # Security updates
+  - unattended-upgrades
+  - apt-listchanges

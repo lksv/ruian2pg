@@ -284,9 +284,11 @@
         // Configuration - change TILE_SERVER_URL for production
         const CONFIG = {
             // Automatically detect tile server URL based on hostname
+            // Local development: direct connection to Martin on port 3000
+            // Production: use /tiles/ path through nginx reverse proxy
             TILE_SERVER_URL: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
                 ? 'http://localhost:3000'
-                : `http://${window.location.hostname}:3000`,
+                : `${window.location.origin}/tiles`,
 
             // Initial map center (Brno - sample data location)
             CENTER: [16.59, 49.21],

@@ -1,0 +1,39 @@
+---
+# Database-only playbook - deploys PostgreSQL/PostGIS and runs migrations
+#
+# Usage:
+#   ansible-playbook playbooks/database.yml
+#   ansible-playbook playbooks/database.yml --tags "migrations"
+
+- name: Deploy PostgreSQL/PostGIS database
+  hosts: production
+  become: true
+
+  roles:
+    - role: common
+      tags: [common]
+
+    - role: docker
+      tags: [docker]
+
+    - role: postgresql
+      tags: [postgresql, database, db]
+
+  post_tasks:
+    - name: Display database info
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          PostgreSQL/PostGIS Deployed!
+          ========================================
+
+          Container: {{ postgres_container }}
+          Database:  {{ db_name }}
+          User:      {{ db_user }}
+
+          Connect from server:
+            docker exec -it {{ postgres_container }} psql -U {{ db_user }} -d {{ db_name }}
+
+          Connect remotely (if port exposed):
+            psql -h {{ ansible_host }} -U {{ db_user }} -d {{ db_name }}
+          ========================================

@@ -1,0 +1,57 @@
+---
+# Main playbook - deploys entire RUIAN2PG stack
+#
+# Usage:
+#   ansible-playbook playbooks/site.yml
+#   ansible-playbook playbooks/site.yml --ask-vault-pass
+#   ansible-playbook playbooks/site.yml --tags "nginx"
+
+- name: Deploy RUIAN2PG stack
+  hosts: production
+  become: true
+
+  pre_tasks:
+    - name: Verify Ansible version
+      ansible.builtin.assert:
+        that:
+          - ansible_version.full is version('2.12', '>=')
+        msg: "Ansible 2.12 or higher is required"
+
+  roles:
+    - role: common
+      tags: [common, base]
+
+    - role: docker
+      tags: [docker]
+
+    - role: postgresql
+      tags: [postgresql, database, db]
+
+    - role: martin
+      tags: [martin, tiles]
+
+    - role: nginx
+      tags: [nginx, web]
+
+    - role: ruian_app
+      tags: [ruian_app, app]
+
+  post_tasks:
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          RUIAN2PG Deployment Complete!
+          ========================================
+
+          Web UI: http://{{ ansible_host }}/
+          Tiles:  http://{{ ansible_host }}/tiles/health
+
+          To import RUIAN data (run on server):
+            cd {{ app_dir }}
+            uv run python scripts/download_ruian.py --latest
+            uv run python scripts/import_ruian.py --latest
+
+          To check database:
+            docker exec {{ postgres_container }} psql -U {{ db_user }} -d {{ db_name }} -c 'SELECT COUNT(*) FROM obce;'
+          ========================================
