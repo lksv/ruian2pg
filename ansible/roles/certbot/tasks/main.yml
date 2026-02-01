@@ -1,0 +1,91 @@
+---
+# Certbot role - Let's Encrypt SSL certificate management
+#
+# This role handles the chicken-and-egg problem:
+# 1. First deployment: nginx serves HTTP only (for ACME challenge)
+# 2. Certbot obtains certificate via webroot method
+# 3. Nginx config is regenerated with HTTPS enabled
+# 4. Subsequent runs: certificate already exists, HTTPS works
+
+- name: Install Certbot and Nginx plugin
+  ansible.builtin.apt:
+    name:
+      - certbot
+      - python3-certbot-nginx
+    state: present
+    update_cache: true
+
+- name: Create webroot directory for ACME challenges
+  ansible.builtin.file:
+    path: "{{ certbot_webroot }}"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+
+- name: Check if certificate already exists
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ ssl_domain }}/fullchain.pem"
+  register: certbot_cert_exists
+
+- name: Obtain SSL certificate using webroot method
+  ansible.builtin.command: >
+    certbot certonly
+    --webroot
+    --webroot-path {{ certbot_webroot }}
+    --domain {{ ssl_domain }}
+    --email {{ certbot_email }}
+    --agree-tos
+    --non-interactive
+  when: not certbot_cert_exists.stat.exists
+  changed_when: true
+  register: certbot_obtained
+  notify: Reload Nginx
+
+- name: Re-check certificate status after obtaining
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ ssl_domain }}/fullchain.pem"
+  register: certbot_cert_exists
+  when: certbot_obtained is changed
+
+- name: Regenerate nginx config with HTTPS after obtaining certificate
+  ansible.builtin.template:
+    src: "{{ role_path }}/../nginx/templates/ruian.conf.j2"
+    dest: /etc/nginx/sites-available/ruian.conf
+    mode: "0644"
+  when: certbot_obtained is changed
+  notify: Reload Nginx
+
+- name: Force handler execution to reload nginx with HTTPS
+  ansible.builtin.meta: flush_handlers
+  when: certbot_obtained is changed
+
+- name: Create post-renewal hook directory
+  ansible.builtin.file:
+    path: /etc/letsencrypt/renewal-hooks/post
+    state: directory
+    mode: "0755"
+
+- name: Deploy nginx reload hook for certificate renewal
+  ansible.builtin.copy:
+    dest: /etc/letsencrypt/renewal-hooks/post/reload-nginx.sh
+    content: |
+      #!/bin/bash
+      systemctl reload nginx
+    mode: "0755"
+
+- name: Enable certbot renewal timer
+  ansible.builtin.systemd:
+    name: certbot.timer
+    enabled: true
+    state: started
+
+- name: Test certificate renewal (dry run)
+  ansible.builtin.command: certbot renew --dry-run
+  changed_when: false
+  register: certbot_renewal_test
+  failed_when: false
+
+- name: Display renewal test result
+  ansible.builtin.debug:
+    msg: "Certificate renewal test: {{ 'PASSED' if certbot_renewal_test.rc == 0 else 'FAILED - check certbot logs' }}"

@@ -31,6 +31,22 @@ martin_port: 3000
 
 # Nginx settings
 nginx_root: "{{ app_dir }}/web"
+tile_cache_size: 2g  # Nginx disk cache for tiles
+
+# Domain settings
+domain_name: "{{ vault_domain_name }}"
+
+# SSL/TLS settings
+ssl_enabled: true
+ssl_domain: "{{ domain_name }}"
+
+# Certbot settings
+certbot_email: "{{ vault_certbot_email }}"
+certbot_webroot: /var/www/certbot
+
+# SSL paths (derived from ssl_domain)
+ssl_certificate: "/etc/letsencrypt/live/{{ ssl_domain }}/fullchain.pem"
+ssl_certificate_key: "/etc/letsencrypt/live/{{ ssl_domain }}/privkey.pem"
 
 # Timezone and locale
 timezone: Europe/Prague

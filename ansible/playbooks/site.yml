@@ -33,6 +33,10 @@
     - role: nginx
       tags: [nginx, web]
 
+    - role: certbot
+      tags: [certbot, ssl, https]
+      when: ssl_enabled | default(false)
+
     - role: ruian_app
       tags: [ruian_app, app]
 
@@ -43,9 +47,13 @@
           ========================================
           RUIAN2PG Deployment Complete!
           ========================================
-
+          {% if ssl_enabled | default(false) %}
+          Web UI: https://{{ domain_name }}/
+          Tiles:  https://{{ domain_name }}/tiles/health
+          {% else %}
           Web UI: http://{{ ansible_host }}/
           Tiles:  http://{{ ansible_host }}/tiles/health
+          {% endif %}
 
           To import RUIAN data (run on server):
             cd {{ app_dir }}

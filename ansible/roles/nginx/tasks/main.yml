@@ -6,6 +6,30 @@
     name: nginx
     state: present
 
+- name: Create tile cache directory
+  ansible.builtin.file:
+    path: /var/cache/nginx/tiles
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+
+- name: Create certbot webroot directory with ACME challenge path
+  ansible.builtin.file:
+    path: "{{ certbot_webroot }}/.well-known/acme-challenge"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  when: ssl_enabled | default(false)
+
+- name: Deploy tile cache configuration
+  ansible.builtin.template:
+    src: tile-cache.conf.j2
+    dest: /etc/nginx/conf.d/tile-cache.conf
+    mode: "0644"
+  notify: Reload Nginx
+
 - name: Ensure home directory is accessible by nginx
   ansible.builtin.file:
     path: "{{ item }}"
@@ -34,6 +58,12 @@
     path: /etc/nginx/sites-enabled/default
     state: absent
   notify: Reload Nginx
+
+- name: Check if SSL certificate exists
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ ssl_domain }}/fullchain.pem"
+  register: certbot_cert_exists
+  when: ssl_enabled | default(false)
 
 - name: Deploy Nginx configuration
   ansible.builtin.template:

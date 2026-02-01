@@ -1,0 +1,9 @@
+# Tile cache configuration
+# Path: /etc/nginx/conf.d/tile-cache.conf
+
+proxy_cache_path /var/cache/nginx/tiles
+    levels=1:2
+    keys_zone=tiles:10m
+    max_size={{ tile_cache_size | default('1g') }}
+    inactive=7d
+    use_temp_path=off;
