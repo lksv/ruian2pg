@@ -64,6 +64,7 @@ psql -U ruian -d ruian -f scripts/migrate_notice_boards_v2.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v3.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v4.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v5.sql
+psql -U ruian -d ruian -f scripts/migrate_notice_boards_v6.sql
 
 # Generate test data for map rendering
 uv run python scripts/generate_test_references.py --cadastral-name "Veveří"
@@ -88,6 +89,38 @@ uv run python scripts/sync_edesky_boards.py --stats
 # Verbose output
 uv run python scripts/sync_edesky_boards.py --all --match-existing --verbose
 ```
+
+### Production: Full Notice Board Reload
+
+To completely reload notice boards on production server:
+
+```bash
+# 1. SSH to production
+ssh lukas@46.224.67.103
+cd ~/ruian2pg
+
+# 2. Truncate notice_boards (cascades to documents, attachments, refs)
+docker exec -i ruian-postgis psql -U ruian -d ruian -c 'TRUNCATE notice_boards CASCADE;'
+
+# 3. Load all boards from eDesky (primary source, ~6,500 boards)
+set -a && source .env && set +a
+uv run python scripts/sync_edesky_boards.py --all
+
+# 4. Enrich with Cesko.Digital data (municipality codes, data boxes, addresses)
+uv run python scripts/import_notice_boards.py data/notice_boards.json --enrich-only
+
+# 5. Verify
+uv run python scripts/import_notice_boards.py --stats
+```
+
+**Why this order?**
+- eDesky is the primary source with consistent IDs and NUTS3/NUTS4 regions
+- Cesko.Digital provides municipality_code (RUIAN link), data_box_id, addresses
+- `--enrich-only` matches by ICO or name+district, updates only NULL fields
+
+**Expected results:**
+- ~6,500 boards from eDesky (all with edesky_id, edesky_url, NUTS3/NUTS4)
+- ~6,300 enriched with Cesko.Digital data (municipality_code, data_box_id)
 
 ### Local Development Services
 

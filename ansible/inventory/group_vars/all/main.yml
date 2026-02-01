@@ -44,6 +44,9 @@ ssl_domain: "{{ domain_name }}"
 certbot_email: "{{ vault_certbot_email }}"
 certbot_webroot: /var/www/certbot
 
+# eDesky API
+edesky_api_key: "{{ vault_edesky_api_key }}"
+
 # SSL paths (derived from ssl_domain)
 ssl_certificate: "/etc/letsencrypt/live/{{ ssl_domain }}/fullchain.pem"
 ssl_certificate_key: "/etc/letsencrypt/live/{{ ssl_domain }}/privkey.pem"
