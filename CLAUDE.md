@@ -323,3 +323,50 @@ storage.save("2024/01/doc123/file.pdf", pdf_bytes)
 - ✅ Web map with document reference layers
 - ⏳ Reference extractors (stub - will use LLM)
 - ⏳ Scrapers (stub - not implemented yet)
+
+## Production Deployment
+
+Automated deployment to production server using Ansible.
+
+See **[ansible/README.md](ansible/README.md)** for full documentation.
+
+### Quick Deploy
+
+```bash
+cd ansible
+
+# Full deployment
+ansible-playbook playbooks/site.yml --vault-password-file .vault_pass
+
+# Deploy specific components
+ansible-playbook playbooks/site.yml --vault-password-file .vault_pass --tags nginx
+ansible-playbook playbooks/site.yml --vault-password-file .vault_pass --tags postgresql,martin
+```
+
+### Stack Components
+
+- **PostgreSQL/PostGIS** - Database container with migrations
+- **Martin** - Vector tile server
+- **Nginx** - Reverse proxy with tile caching
+- **Certbot** - Let's Encrypt SSL certificates (auto-renewal)
+
+### Ansible Directory Structure
+
+```
+ansible/
+├── inventory/
+│   ├── hosts.yml                    # Server inventory
+│   └── group_vars/all/
+│       ├── main.yml                 # Variables
+│       └── vault.yml                # Encrypted secrets
+├── playbooks/
+│   └── site.yml                     # Main playbook
+└── roles/
+    ├── common/                      # Base system setup
+    ├── docker/                      # Docker installation
+    ├── ruian_app/                   # Application code
+    ├── postgresql/                  # Database + migrations
+    ├── martin/                      # Tile server
+    ├── nginx/                       # Web server
+    └── certbot/                     # SSL certificates
+```

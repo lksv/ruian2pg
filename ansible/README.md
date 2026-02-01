@@ -7,6 +7,7 @@ Automated deployment for RUIAN2PG stack on Ubuntu 24.04.
 - **PostgreSQL/PostGIS** - Database with RUIAN data
 - **Martin** - Vector tile server
 - **Nginx** - Reverse proxy and static file server
+- **Certbot** - Let's Encrypt SSL certificate management
 - **RUIAN App** - Python application for data import
 
 ## Quick Start
@@ -14,15 +15,15 @@ Automated deployment for RUIAN2PG stack on Ubuntu 24.04.
 ```bash
 cd ansible
 
-# Edit vault with your database password
-ansible-vault create inventory/group_vars/vault.yml
-# Set: vault_db_password: "your_secure_password"
+# Create vault password file
+echo "your_vault_password" > .vault_pass
+chmod 600 .vault_pass
+
+# Create and edit vault with secrets
+ansible-vault create inventory/group_vars/all/vault.yml --vault-password-file .vault_pass
 
 # Run full deployment
-ansible-playbook playbooks/site.yml --ask-vault-pass
-
-# Or without vault (uses default password - not recommended for production)
-ansible-playbook playbooks/site.yml
+ansible-playbook playbooks/site.yml --vault-password-file .vault_pass
 ```
 
 ## Directory Structure
@@ -30,24 +31,24 @@ ansible-playbook playbooks/site.yml
 ```
 ansible/
 ├── ansible.cfg                  # Ansible configuration
+├── .vault_pass                  # Vault password (not in git)
 ├── inventory/
 │   ├── hosts.yml               # Server inventory
 │   └── group_vars/
-│       ├── all.yml             # Common variables
-│       └── vault.yml           # Encrypted secrets (ansible-vault)
+│       └── all/
+│           ├── main.yml        # Common variables
+│           └── vault.yml       # Encrypted secrets
 ├── playbooks/
-│   ├── site.yml                # Main playbook (full deployment)
-│   ├── database.yml            # Database only
-│   └── maintenance.yml         # Backup, update, restart
+│   └── site.yml                # Main playbook (full deployment)
 ├── roles/
 │   ├── common/                 # System packages, locale, timezone
 │   ├── docker/                 # Docker CE installation
+│   ├── ruian_app/              # RUIAN Python application
 │   ├── postgresql/             # PostGIS container + migrations
 │   ├── martin/                 # Martin tile server
 │   ├── nginx/                  # Nginx reverse proxy
-│   └── ruian_app/              # RUIAN Python application
+│   └── certbot/                # Let's Encrypt SSL certificates
 └── files/
-    ├── web/                    # Static web files
     └── sql/                    # SQL migrations
 ```
 
@@ -57,49 +58,33 @@ ansible/
 
 ```bash
 # Deploy everything
-ansible-playbook playbooks/site.yml --ask-vault-pass
+ansible-playbook playbooks/site.yml --vault-password-file .vault_pass
 
 # Deploy specific components
-ansible-playbook playbooks/site.yml --tags "nginx"
-ansible-playbook playbooks/site.yml --tags "postgresql,martin"
+ansible-playbook playbooks/site.yml --vault-password-file .vault_pass --tags "nginx"
+ansible-playbook playbooks/site.yml --vault-password-file .vault_pass --tags "postgresql,martin"
 ```
 
-### Database Only
+### Available Tags
 
-```bash
-ansible-playbook playbooks/database.yml --ask-vault-pass
-```
-
-### Maintenance
-
-```bash
-# Create database backup
-ansible-playbook playbooks/maintenance.yml --tags backup
-
-# Update containers to latest images
-ansible-playbook playbooks/maintenance.yml --tags update
-
-# Restart services
-ansible-playbook playbooks/maintenance.yml --tags restart
-
-# Show status
-ansible-playbook playbooks/maintenance.yml --tags status
-
-# Cleanup unused Docker resources
-ansible-playbook playbooks/maintenance.yml --tags cleanup
-```
+- `common` - Base system setup
+- `docker` - Docker installation
+- `ruian_app` - Application code and dependencies
+- `postgresql`, `db` - Database container and migrations
+- `martin`, `tiles` - Tile server
+- `nginx`, `web` - Web server
+- `certbot`, `ssl`, `https` - SSL certificates
 
 ## Post-Deployment
 
 ### Import RUIAN Data
 
-After deployment, import RUIAN data manually:
+After deployment, import RUIAN data manually on the server:
 
 ```bash
-ssh lukas@46.224.67.103
+cd ~/ruian2pg
 
 # Download and import latest data
-cd ~/ruian2pg
 uv run python scripts/download_ruian.py --latest
 uv run python scripts/import_ruian.py --latest
 
@@ -112,19 +97,19 @@ uv run python scripts/import_ruian.py --municipalities
 
 ```bash
 # Health checks
-curl http://46.224.67.103/health
-curl http://46.224.67.103/tiles/health
+curl https://lksvrocks.cz/health
+curl https://lksvrocks.cz/tiles/health
 
 # Test tile endpoint
-curl -o /tmp/tile.pbf http://46.224.67.103/tiles/obce/10/559/351
+curl -o /tmp/tile.pbf https://lksvrocks.cz/tiles/obce/10/559/351
 
 # Check database
-ssh lukas@46.224.67.103 "docker exec ruian-postgis psql -U ruian -d ruian -c 'SELECT COUNT(*) FROM obce;'"
+docker exec ruian-postgis psql -U ruian -d ruian -c 'SELECT COUNT(*) FROM obce;'
 ```
 
 ### Access Web UI
 
-Open http://46.224.67.103/ in your browser to view the map.
+Open https://lksvrocks.cz/ in your browser to view the map.
 
 ## Configuration
 
@@ -133,32 +118,33 @@ Open http://46.224.67.103/ in your browser to view the map.
 Create encrypted vault file:
 
 ```bash
-ansible-vault create inventory/group_vars/vault.yml
+ansible-vault create inventory/group_vars/all/vault.yml --vault-password-file .vault_pass
 ```
 
-Required variables (use `vault_` prefix by convention):
+Required variables:
 
 ```yaml
+# Server connection
+vault_server_ip: "your.server.ip.address"
+vault_server_user: "your_ssh_username"
+
+# Domain and SSL
+vault_domain_name: "your-domain.com"
+vault_certbot_email: "your-email@example.com"
+
+# Database
 vault_db_password: "your_secure_database_password"
 ```
-
-Optional variables:
-
-```yaml
-vault_ruian_domain: "ruian.example.com"  # For SSL later
-```
-
-These are mapped to normal variable names in `all.yml` (e.g., `db_password: "{{ vault_db_password }}"`)
 
 ### Edit Vault
 
 ```bash
-ansible-vault edit inventory/group_vars/vault.yml
+ansible-vault edit inventory/group_vars/all/vault.yml --vault-password-file .vault_pass
 ```
 
 ### Server Configuration
 
-Edit `inventory/hosts.yml` to change server IP or user:
+Server connection details are stored in the vault and referenced in `inventory/hosts.yml`:
 
 ```yaml
 all:
@@ -166,43 +152,63 @@ all:
     production:
       hosts:
         ruian-server:
-          ansible_host: 46.224.67.103
-          ansible_user: lukas
+          ansible_host: "{{ vault_server_ip }}"
+          ansible_user: "{{ vault_server_user }}"
 ```
 
-## SSL (Future)
+## SSL/HTTPS
 
-SSL via Let's Encrypt can be added later by:
+SSL is automatically configured via Let's Encrypt:
 
-1. Adding a certbot role
-2. Updating nginx configuration for HTTPS
-3. Setting up auto-renewal
+- **First deployment**: Nginx serves HTTP, certbot obtains certificate, nginx is reconfigured for HTTPS
+- **Subsequent deployments**: HTTPS is already active
+- **Auto-renewal**: Enabled via systemd timer (`certbot.timer`)
+
+### Manual Certificate Commands
+
+```bash
+# Check certificate status
+sudo certbot certificates
+
+# Test renewal
+sudo certbot renew --dry-run
+
+# Force renewal
+sudo certbot renew --force-renewal
+```
 
 ## Troubleshooting
 
 ### Check Docker Containers
 
 ```bash
-ssh lukas@46.224.67.103 "docker ps -a"
+docker ps -a
 ```
 
 ### View Logs
 
 ```bash
 # PostgreSQL logs
-ssh lukas@46.224.67.103 "docker logs ruian-postgis"
+docker logs ruian-postgis
 
 # Martin logs
-ssh lukas@46.224.67.103 "docker logs martin"
+docker logs martin
 
 # Nginx logs
-ssh lukas@46.224.67.103 "tail -f /var/log/nginx/ruian_error.log"
+tail -f /var/log/nginx/ruian_error.log
+
+# Certbot logs
+cat /var/log/letsencrypt/letsencrypt.log
 ```
 
 ### Restart Services
 
 ```bash
-ansible-playbook playbooks/maintenance.yml --tags restart
+# Restart all containers
+docker restart ruian-postgis martin
+
+# Reload nginx
+sudo systemctl reload nginx
 ```
 
 ### Reset Database
@@ -210,12 +216,11 @@ ansible-playbook playbooks/maintenance.yml --tags restart
 To completely reset the database (WARNING: destroys all data):
 
 ```bash
-ssh lukas@46.224.67.103
 docker stop ruian-postgis
 docker rm ruian-postgis
 docker volume rm ruian_pgdata
 rm -f ~/.migrations/*.done
 
 # Then redeploy
-ansible-playbook playbooks/database.yml --ask-vault-pass
+ansible-playbook playbooks/site.yml --vault-password-file .vault_pass --tags postgresql
 ```
