@@ -65,6 +65,7 @@ psql -U ruian -d ruian -f scripts/migrate_notice_boards_v3.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v4.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v5.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v6.sql
+psql -U ruian -d ruian -f scripts/migrate_notice_boards_v7.sql
 
 # Generate test data for map rendering
 uv run python scripts/generate_test_references.py --cadastral-name "Veveří"
@@ -118,6 +119,97 @@ uv run python scripts/download_ofn_documents.py --stats
 - OFN feeds return only active documents (not archived like eDesky)
 - Some feeds have non-standard date formats - these documents are skipped with warning
 - Re-running updates existing documents (no duplicates)
+
+### Attachment Download
+
+Download attachment files for documents that have only metadata (orig_url but no content).
+
+**Download Status Lifecycle:**
+- `pending` - awaiting download (default)
+- `downloaded` - content successfully downloaded
+- `failed` - download failed (can be retried)
+- `removed` - marked as not to be downloaded (terminal)
+
+```bash
+# Show statistics (total, pending, downloaded, failed, removed)
+uv run python scripts/download_attachments.py --stats
+
+# Download all pending attachments
+uv run python scripts/download_attachments.py --all
+
+# Download for specific board
+uv run python scripts/download_attachments.py --board-id 123
+
+# Download with limit
+uv run python scripts/download_attachments.py --all --limit 100
+
+# Preview without downloading (dry-run)
+uv run python scripts/download_attachments.py --all --dry-run --verbose
+
+# Skip SSL verification for problematic servers
+uv run python scripts/download_attachments.py --all --skip-ssl-verify
+
+# Filter by document publication date
+uv run python scripts/download_attachments.py --all --published-after 2024-01-01
+uv run python scripts/download_attachments.py --all --published-before 2024-12-31
+
+# Mark old attachments as removed (won't be downloaded)
+uv run python scripts/download_attachments.py --mark-removed --published-before 2020-01-01
+
+# Reset failed attachments to pending for retry
+uv run python scripts/download_attachments.py --reset-failed
+
+# List pending attachments
+uv run python scripts/download_attachments.py --list-pending --limit 50
+```
+
+**Library usage:**
+```python
+from notice_boards.services import AttachmentDownloader, DownloadConfig
+from notice_boards.config import get_db_connection
+from datetime import date
+from pathlib import Path
+
+# Basic usage
+config = DownloadConfig(max_size_bytes=50 * 1024 * 1024)
+downloader = AttachmentDownloader(
+    conn=get_db_connection(),
+    storage_path=Path("data/attachments"),
+    config=config,
+)
+
+# Download all pending
+stats = downloader.download_all()
+print(f"Downloaded: {stats.downloaded}, Failed: {stats.failed}")
+
+# Download for specific board
+stats = downloader.download_by_board(board_id=123)
+
+# With date filters
+config = DownloadConfig(
+    published_after=date(2024, 1, 1),
+    published_before=date(2024, 12, 31),
+)
+downloader = AttachmentDownloader(conn, storage_path, config)
+stats = downloader.download_all()
+
+# Mark attachments as removed
+count = downloader.mark_removed([1, 2, 3])
+count = downloader.mark_removed_by_date(date(2020, 1, 1))
+
+# Reset failed to pending
+count = downloader.reset_to_pending(failed_only=True)
+
+# Get status counts
+counts = downloader.get_status_counts()
+# {'pending': 100, 'downloaded': 500, 'failed': 10, 'removed': 50}
+
+# Get attachment content (unified API for TextExtractionService)
+content = downloader.get_attachment_content(attachment_id=123, persist=True)
+# - Loads from storage if available
+# - Downloads from orig_url if not stored
+# - persist=True saves to storage after download
+```
 
 ### Production: Full Notice Board Reload
 

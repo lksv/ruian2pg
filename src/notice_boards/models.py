@@ -9,6 +9,29 @@ from datetime import date, datetime
 from typing import Any
 
 
+class DownloadStatus:
+    """Constants for attachment download lifecycle states.
+
+    State transitions:
+        pending → downloaded (successful download)
+        pending → failed (download error, can retry)
+        pending → removed (marked to skip)
+        failed → pending (reset for retry)
+        failed → removed (give up)
+    """
+
+    PENDING = "pending"
+    DOWNLOADED = "downloaded"
+    FAILED = "failed"
+    REMOVED = "removed"
+
+    # All valid statuses
+    ALL = (PENDING, DOWNLOADED, FAILED, REMOVED)
+
+    # Terminal states (no further processing)
+    TERMINAL = (DOWNLOADED, REMOVED)
+
+
 @dataclass
 class NoticeBoard:
     """Notice board source - a municipality or public authority."""
@@ -110,6 +133,8 @@ class Attachment:
     created_at: datetime | None = None
     # eDesky integration fields (migration v5)
     orig_url: str | None = None
+    # Download lifecycle (migration v7)
+    download_status: str = DownloadStatus.PENDING
 
 
 @dataclass

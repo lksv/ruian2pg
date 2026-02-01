@@ -93,6 +93,26 @@ Notice Board APIs ──► fetch_notice_boards.py ──► JSON ──► impo
        ├── Česko.Digital API                                                           │
        └── NKOD OFN GraphQL                                                            │
                                                                                        ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│                              Attachment Processing Pipeline                               │
+├──────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                          │
+│  Documents ──► AttachmentDownloader ──► StorageBackend ──► TextExtractionService         │
+│      │              │                       │                    │                       │
+│      │              │                       │                    │                       │
+│      │         download_status:             │              parse_status:                 │
+│      │         pending → downloaded         │              pending → completed           │
+│      │         pending → failed             │                    │                       │
+│      │         pending → removed            │                    ▼                       │
+│      │              │                       │              extracted_text                │
+│      │              ▼                       │                    │                       │
+│      │         orig_url ──────────────► storage_path             │                       │
+│      │                                      │                    │                       │
+│      └──────────────────────────────────────┴────────────────────┘                       │
+│                                                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+                                             │
+                                             ▼
 PDF Documents ──► TextExtractor ──► Text ──► LLM (future) ──► References ──► Validator ──► *_refs tables
        │               │                                           │               │
        │               ├── PdfTextExtractor (PyMuPDF)              │               └── RuianValidator
@@ -102,6 +122,74 @@ PDF Documents ──► TextExtractor ──► Text ──► LLM (future) ─�
            (FilesystemStorage)                                     └── parcel_refs, address_refs,
                                                                        street_refs, building_refs
 ```
+
+### Attachment Download Status Lifecycle
+
+Attachments have an explicit download lifecycle managed by `download_status` column:
+
+```
+                     ┌─────────────────┐
+                     │     pending     │ (default state)
+                     │   has orig_url  │
+                     └────────┬────────┘
+                              │
+            ┌─────────────────┼─────────────────┐
+            │                 │                 │
+            │ download()      │ mark_removed()  │
+            │ success         │                 │
+            ▼                 │                 ▼
+   ┌─────────────────┐        │        ┌─────────────────┐
+   │   downloaded    │        │        │     removed     │ (terminal)
+   │ has storage_path│        │        │  won't download │
+   └─────────────────┘        │        └─────────────────┘
+                              │                 ▲
+                              │                 │
+                    download()│                 │ give up
+                    failed    │                 │
+                              ▼                 │
+                     ┌─────────────────┐        │
+                     │     failed      │────────┘
+                     │   can retry     │
+                     └────────┬────────┘
+                              │
+                              │ reset_to_pending()
+                              ▼
+                     ┌─────────────────┐
+                     │     pending     │
+                     └─────────────────┘
+```
+
+**States:**
+| Status | Description | Next States |
+|--------|-------------|-------------|
+| `pending` | Awaiting download, has `orig_url` | `downloaded`, `failed`, `removed` |
+| `downloaded` | Content saved to `storage_path` | (terminal) |
+| `failed` | Download error, can be retried | `pending`, `removed` |
+| `removed` | Marked to skip (e.g., too old) | (terminal) |
+
+**Workflow Options:**
+
+1. **Download first, extract later** (persistent storage)
+   ```
+   download_status: pending → downloaded
+   parse_status:             pending → completed
+   storage_path:             (saved)
+   ```
+
+2. **Stream extraction** (no persistence, saves disk space)
+   ```
+   download_status: pending (unchanged)
+   parse_status:             pending → completed
+   storage_path:             (empty)
+   extracted_text:           (saved)
+   ```
+
+3. **Download, extract, cleanup** (temporary storage)
+   ```
+   download_status: pending → downloaded → removed
+   parse_status:             pending → completed
+   storage_path:             (saved) → (deleted)
+   ```
 
 ## Database Schema
 
@@ -126,31 +214,31 @@ Tables created automatically by ogr2ogr from VFR files:
 ### Notice Board Tables
 
 ```
-┌──────────────────┐       ┌─────────────────┐       ┌────────────────┐
-│  notice_boards   │       │    documents    │       │  attachments   │
-├──────────────────┤       ├─────────────────┤       ├────────────────┤
-│ id (PK)          │◄──┐   │ id (PK)         │◄──┐   │ id (PK)        │
-│ municipality_code│   │   │ notice_board_id │───┘   │ document_id    │───┐
-│ name             │   │   │ document_type_id│       │ filename       │   │
-│ ico              │   │   │ title           │       │ storage_path   │   │
-│ source_url       │   │   │ published_at    │       │ extracted_text │   │
-│ edesky_url       │   │   │ parse_status    │       │ parse_status   │   │
-│ ofn_json_url     │   │   └─────────────────┘       └────────────────┘   │
-│ board_type       │   │                                    │             │
-│ data_box_id      │   │   ┌─────────────────┐              │             │
-└──────────────────┘   │   │ document_types  │              │             │
-                       │   ├─────────────────┤              │             │
-┌──────────────────┐   │   │ id (PK)         │              │             │
-│    ref_types     │   │   │ code            │              │             │
-├──────────────────┤   │   │ name            │              │             │
-│ id (PK)          │   │   │ category        │              │             │
-│ code             │   │   └─────────────────┘              │             │
-│ name             │   │                                    │             │
-└──────────────────┘   │                                    │             │
-        │              │                                    │             │
-        │              │   ┌──────────────────────────────────────────────┘
-        │              │   │
-        ▼              │   ▼
+┌──────────────────┐       ┌─────────────────┐       ┌──────────────────┐
+│  notice_boards   │       │    documents    │       │   attachments    │
+├──────────────────┤       ├─────────────────┤       ├──────────────────┤
+│ id (PK)          │◄──┐   │ id (PK)         │◄──┐   │ id (PK)          │
+│ municipality_code│   │   │ notice_board_id │───┘   │ document_id      │───┐
+│ name             │   │   │ document_type_id│       │ filename         │   │
+│ ico              │   │   │ title           │       │ orig_url         │   │
+│ source_url       │   │   │ published_at    │       │ storage_path     │   │
+│ edesky_url       │   │   │ parse_status    │       │ download_status* │   │
+│ ofn_json_url     │   │   └─────────────────┘       │ parse_status     │   │
+│ board_type       │   │                             │ extracted_text   │   │
+│ data_box_id      │   │   ┌─────────────────┐       └──────────────────┘   │
+└──────────────────┘   │   │ document_types  │              │               │
+                       │   ├─────────────────┤              │               │
+┌──────────────────┐   │   │ id (PK)         │              │               │
+│    ref_types     │   │   │ code            │              │               │
+├──────────────────┤   │   │ name            │              │               │
+│ id (PK)          │   │   │ category        │              │               │
+│ code             │   │   └─────────────────┘              │               │
+│ name             │   │                                    │               │
+└──────────────────┘   │                                    │               │
+        │              │                                    │               │
+        │              │   ┌────────────────────────────────┘               │
+        │              │   │                                                │
+        ▼              │   ▼                                                │
 ┌──────────────────────┴───────────────────────────────────────────────────┐
 │                        Reference Tables                                   │
 ├──────────────────┬──────────────────┬──────────────────┬─────────────────┤
@@ -180,6 +268,12 @@ Tables created automatically by ogr2ogr from VFR files:
                      │ confidence       │
                      └──────────────────┘
 ```
+
+**`*download_status` values** (migration v7):
+- `pending` - awaiting download (default)
+- `downloaded` - content saved to storage_path
+- `failed` - download failed (can retry)
+- `removed` - marked to skip (terminal)
 
 ### Martin Function Sources
 
@@ -255,15 +349,32 @@ from notice_boards.models import (
     AddressRef,       # Extracted address reference
     StreetRef,        # Extracted street reference
     LvRef,            # Extracted ownership sheet reference
+    DownloadStatus,   # Constants for attachment download lifecycle
 )
 
-# Example
+# Example: Document
 doc = Document(
     notice_board_id=1,
     title="Rozhodnutí o povolení stavby",
     published_at=date(2024, 1, 15),
     parse_status="pending"
 )
+
+# Example: Attachment with download_status
+att = Attachment(
+    document_id=1,
+    filename="rozhodnuti.pdf",
+    orig_url="https://example.com/doc.pdf",
+    download_status=DownloadStatus.PENDING,  # 'pending', 'downloaded', 'failed', 'removed'
+)
+
+# DownloadStatus constants
+DownloadStatus.PENDING     # 'pending' - awaiting download
+DownloadStatus.DOWNLOADED  # 'downloaded' - content saved
+DownloadStatus.FAILED      # 'failed' - can retry
+DownloadStatus.REMOVED     # 'removed' - skip (terminal)
+DownloadStatus.ALL         # ('pending', 'downloaded', 'failed', 'removed')
+DownloadStatus.TERMINAL    # ('downloaded', 'removed')
 ```
 
 #### RuianValidator (`validators.py`)
@@ -443,6 +554,136 @@ with scraper:
 - `agenda[0].název.cs` → `metadata.category`
 - `dokument[].url` → `attachments[].url`
 
+#### AttachmentDownloader (`services/attachment_downloader.py`)
+
+Service for downloading attachment content for records that have metadata but no files.
+Manages attachment lifecycle through `download_status` states.
+
+```python
+from notice_boards.services import AttachmentDownloader, DownloadConfig
+from notice_boards.models import DownloadStatus
+from notice_boards.config import get_db_connection
+from datetime import date
+from pathlib import Path
+
+# Create downloader with date filters
+config = DownloadConfig(
+    max_size_bytes=50 * 1024 * 1024,  # 50 MB
+    request_timeout=60,
+    skip_ssl_verify=False,
+    published_after=date(2024, 1, 1),   # Filter by document date
+    published_before=date(2024, 12, 31),
+)
+downloader = AttachmentDownloader(
+    conn=get_db_connection(),
+    storage_path=Path("data/attachments"),
+    config=config,
+)
+
+# Get statistics by download_status
+stats = downloader.get_stats()
+print(f"Total: {stats['total']}")
+print(f"Downloaded: {stats['downloaded']}, Pending: {stats['pending']}")
+print(f"Failed: {stats['failed']}, Removed: {stats['removed']}")
+
+# Get status counts
+counts = downloader.get_status_counts()
+# {'pending': 100, 'downloaded': 500, 'failed': 10, 'removed': 50}
+
+# Get pending attachments (without downloading)
+pending = downloader.get_pending_attachments(limit=10)
+for att in pending:
+    print(f"{att.id}: {att.filename} from {att.orig_url}")
+
+# Download all pending with progress callback
+def on_progress(result):
+    if result.success:
+        print(f"Downloaded: {result.attachment_id} ({result.file_size} bytes)")
+    else:
+        print(f"Failed: {result.attachment_id} - {result.error}")
+
+with downloader:
+    stats = downloader.download_all(on_progress=on_progress)
+    print(f"Completed: {stats.downloaded} downloaded, {stats.failed} failed")
+
+# Download for specific board
+stats = downloader.download_by_board(board_id=123)
+
+# Mark old attachments as removed (won't be downloaded)
+count = downloader.mark_removed_by_date(date(2020, 1, 1))
+print(f"Marked {count} attachments as removed")
+
+# Mark specific attachments as removed
+count = downloader.mark_removed([1, 2, 3])
+
+# Reset failed attachments to pending for retry
+count = downloader.reset_to_pending(failed_only=True)
+
+# Unified content API (used by TextExtractionService)
+content = downloader.get_attachment_content(attachment_id=123, persist=True)
+# - Loads from storage if available
+# - Downloads from orig_url if not stored
+# - persist=True saves to storage after download
+```
+
+**Key methods:**
+- `get_pending_count()` - Count attachments with `download_status='pending'`
+- `iter_pending_attachments()` - Iterate over pending attachments
+- `download_attachment()` - Download single attachment
+- `download_all()` - Download all pending with optional date filters
+- `download_by_board()` - Download for specific notice board
+- `get_stats()` - Get counts by `download_status`
+- `get_stats_by_board()` - Get statistics grouped by board
+- `get_status_counts()` - Get counts per status
+- `mark_removed()` - Mark attachments as removed (by ID list)
+- `mark_removed_by_date()` - Mark as removed by publication date
+- `mark_failed()` - Mark single attachment as failed
+- `reset_to_pending()` - Reset failed/removed to pending
+- `get_attachment_content()` - Unified API for getting content (download or load)
+- `get_attachments_by_status()` - Query attachments by any status
+
+#### TextExtractionService (`services/text_extractor.py`)
+
+Service for extracting text from document attachments. Uses `AttachmentDownloader.get_attachment_content()` as unified API for content access.
+
+**Note:** This is a placeholder for future implementation.
+
+```python
+from notice_boards.services import TextExtractionService, AttachmentDownloader
+from notice_boards.config import get_db_connection
+from pathlib import Path
+
+conn = get_db_connection()
+downloader = AttachmentDownloader(conn, Path("data/attachments"))
+service = TextExtractionService(conn, downloader)
+
+# Extract text (auto-downloads if needed, doesn't persist file)
+text = service.extract_text(attachment_id=123, persist_attachment=False)
+
+# Extract and also save the attachment
+text = service.extract_text(attachment_id=123, persist_attachment=True)
+
+# Batch extraction with date filters
+stats = service.extract_batch(
+    persist_attachments=False,  # Stream mode - no file storage
+    published_after=date(2024, 1, 1),
+    limit=100,
+)
+print(f"Extracted: {stats.extracted}, Failed: {stats.failed}")
+```
+
+**Key methods:**
+- `extract_text()` - Extract text from single attachment
+- `extract_batch()` - Process multiple pending attachments
+
+**Workflow integration:**
+
+The `TextExtractionService` uses `AttachmentDownloader.get_attachment_content()` which:
+1. Checks if file exists in storage → returns from storage
+2. If not stored but has `orig_url` → downloads content
+3. If `persist=True` → saves to storage, updates DB
+4. If `persist=False` → returns content without saving (streaming mode)
+
 #### DocumentRepository (`repository.py`)
 
 Database operations for scraped documents with upsert logic.
@@ -563,26 +804,40 @@ ruian2pg/
 │   │
 │   └── notice_boards/          # Notice board module
 │       ├── config.py           # DatabaseConfig, StorageConfig
-│       ├── models.py           # Dataclasses (NoticeBoard, Document, ...)
+│       ├── models.py           # Dataclasses (NoticeBoard, Document, DownloadStatus, ...)
 │       ├── storage.py          # StorageBackend, FilesystemStorage
 │       ├── validators.py       # RuianValidator
+│       ├── repository.py       # DocumentRepository (DB operations)
+│       ├── scraper_config.py   # EdeskyConfig, OfnConfig
+│       ├── services/
+│       │   ├── __init__.py     # Service exports
+│       │   ├── attachment_downloader.py  # AttachmentDownloader
+│       │   └── text_extractor.py         # TextExtractionService (placeholder)
 │       ├── parsers/
 │       │   ├── base.py         # TextExtractor ABC
 │       │   ├── pdf.py          # PdfTextExtractor, PdfPlumberExtractor
 │       │   └── references.py   # Reference dataclasses (stub)
 │       └── scrapers/
-│           └── base.py         # NoticeBoardScraper ABC (stub)
+│           ├── base.py         # NoticeBoardScraper ABC
+│           ├── edesky.py       # EdeskyApiClient, EdeskyScraper
+│           └── ofn.py          # OfnClient, OfnScraper
 │
 ├── scripts/
 │   ├── download_ruian.py       # CLI: download VFR files
 │   ├── import_ruian.py         # CLI: import to PostGIS
 │   ├── fetch_notice_boards.py  # CLI: fetch notice board list
 │   ├── import_notice_boards.py # CLI: import notice boards to DB
+│   ├── sync_edesky_boards.py   # CLI: sync with eDesky.cz
+│   ├── download_ofn_documents.py    # CLI: download OFN documents
+│   ├── download_attachments.py      # CLI: download attachment files
 │   ├── generate_test_references.py  # Generate test data
 │   ├── setup_notice_boards_db.sql   # Initial schema
 │   ├── migrate_notice_boards_v2.sql # Migration: nutslau, coat_of_arms
 │   ├── migrate_notice_boards_v3.sql # Migration: building_refs
 │   ├── migrate_notice_boards_v4.sql # Migration: optimize tile functions
+│   ├── migrate_notice_boards_v5.sql # Migration: eDesky fields
+│   ├── migrate_notice_boards_v6.sql # Migration: remove ICO unique
+│   ├── migrate_notice_boards_v7.sql # Migration: download_status
 │   └── setup_indexes.sql       # Spatial indexes
 │
 ├── web/
