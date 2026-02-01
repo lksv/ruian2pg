@@ -90,6 +90,35 @@ uv run python scripts/sync_edesky_boards.py --stats
 uv run python scripts/sync_edesky_boards.py --all --match-existing --verbose
 ```
 
+### OFN Document Download
+
+OFN (Open Formal Norm) is the Czech standard for official notice board data. Download documents from boards with OFN JSON-LD feeds:
+
+```bash
+# Download from specific OFN feed URL
+uv run python scripts/download_ofn_documents.py --url "https://edeska.brno.cz/eDeska01/opendata"
+
+# Download from board by database ID
+uv run python scripts/download_ofn_documents.py --board-id 40888
+
+# Download from ALL boards with OFN URL (~197 boards, ~23k documents)
+uv run python scripts/download_ofn_documents.py --all-ofn
+
+# Include original attachment files (not just metadata)
+uv run python scripts/download_ofn_documents.py --all-ofn --download-originals
+
+# Preview without saving (dry-run)
+uv run python scripts/download_ofn_documents.py --url "..." --dry-run --verbose
+
+# Show statistics
+uv run python scripts/download_ofn_documents.py --stats
+```
+
+**Notes:**
+- OFN feeds return only active documents (not archived like eDesky)
+- Some feeds have non-standard date formats - these documents are skipped with warning
+- Re-running updates existing documents (no duplicates)
+
 ### Production: Full Notice Board Reload
 
 To completely reload notice boards on production server:
@@ -185,6 +214,8 @@ WHERE p.geom && ST_Transform(ST_TileEnvelope(z, x, y), 5514)
 - `TextExtractor` (`src/notice_boards/parsers/base.py`) - PDF text extraction
 - `EdeskyApiClient` (`src/notice_boards/scrapers/edesky.py`) - eDesky.cz API client for notice board metadata
 - `EdeskyScraper` (`src/notice_boards/scrapers/edesky.py`) - scraper for eDesky documents
+- `OfnClient` (`src/notice_boards/scrapers/ofn.py`) - HTTP client for OFN JSON-LD feeds
+- `OfnScraper` (`src/notice_boards/scrapers/ofn.py`) - scraper for OFN notice board documents
 - `DocumentRepository` (`src/notice_boards/repository.py`) - database operations for documents/attachments
 
 ## Database Tables

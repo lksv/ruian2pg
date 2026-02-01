@@ -504,6 +504,42 @@ uv run python scripts/sync_edesky_boards.py --all --match-existing --verbose
 - `edesky_parent_id/name` - parent board in hierarchy
 - `latitude`, `longitude` - coordinates
 
+### Download OFN Documents
+
+OFN (Open Formal Norm) is the Czech standard for official notice board data in JSON-LD format. Download documents from boards that provide OFN feeds:
+
+```bash
+# Download from specific OFN feed URL
+uv run python scripts/download_ofn_documents.py --url "https://edeska.brno.cz/eDeska01/opendata"
+
+# Download from board by database ID
+uv run python scripts/download_ofn_documents.py --board-id 40888
+
+# Download from ALL boards with OFN URL (~197 boards)
+uv run python scripts/download_ofn_documents.py --all-ofn
+
+# Include original attachment files (PDFs, etc.)
+uv run python scripts/download_ofn_documents.py --all-ofn --download-originals
+
+# Preview without saving (dry-run)
+uv run python scripts/download_ofn_documents.py --url "..." --dry-run --verbose
+
+# Show statistics
+uv run python scripts/download_ofn_documents.py --stats
+```
+
+**Features:**
+- Parses OFN JSON-LD format (Czech standard)
+- Extracts document metadata: title, publication date, reference numbers, categories
+- Downloads attachment files (PDFs) with `--download-originals`
+- Incremental updates - re-running updates existing documents without duplicates
+- Handles non-standard date formats gracefully (skips with warning)
+
+**OFN vs eDesky:**
+- OFN feeds contain only active (current) documents
+- eDesky archive contains historical documents back to ~2011
+- ~197 boards have OFN feeds, ~6,500 boards are on eDesky
+
 ### Generate Test References
 
 Generate test data for validating map rendering:

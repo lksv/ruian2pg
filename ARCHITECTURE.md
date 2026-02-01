@@ -400,6 +400,49 @@ with EdeskyXmlClient() as client:
     text = client.get_document_text(doc.edesky_url)
 ```
 
+#### OFN Integration (`scrapers/ofn.py`)
+
+Client and scraper for OFN (Open Formal Norm) JSON-LD feeds.
+
+```python
+from notice_boards.scrapers.ofn import (
+    OfnClient,       # HTTP client for OFN feeds
+    OfnScraper,      # Document scraper
+    OfnDocument,     # Document with attachments
+    OfnAttachment,   # Attachment metadata
+    OfnBoard,        # Feed metadata
+)
+from notice_boards.scraper_config import OfnConfig
+
+# Direct client usage
+config = OfnConfig()
+with OfnClient(config) as client:
+    board = client.fetch_feed("https://edeska.brno.cz/eDeska01/opendata")
+    print(f"Found {len(board.documents)} documents")
+
+    for doc in board.documents:
+        print(f"{doc.title}: {len(doc.attachments)} attachments")
+        print(f"  Published: {doc.published_at}")
+        print(f"  Reference: {doc.reference_number}")
+
+# Scraper usage (returns DocumentData for storage)
+scraper = OfnScraper(config, download_originals=True)
+with scraper:
+    documents = scraper.scrape_by_url("https://edeska.brno.cz/eDeska01/opendata")
+    for doc in documents:
+        print(f"{doc.external_id}: {doc.title}")
+```
+
+**OFN JSON-LD fields mapped:**
+- `iri` → `external_id` (SHA-256 hash, prefixed with `ofn_`)
+- `název.cs` → `title`
+- `vyvěšení.datum` → `published_at`
+- `relevantní_do.datum` → `valid_until`
+- `číslo_jednací` → `metadata.reference_number`
+- `spisová_značka` → `metadata.file_reference`
+- `agenda[0].název.cs` → `metadata.category`
+- `dokument[].url` → `attachments[].url`
+
 #### DocumentRepository (`repository.py`)
 
 Database operations for scraped documents with upsert logic.

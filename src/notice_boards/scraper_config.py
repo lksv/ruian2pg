@@ -52,6 +52,35 @@ class EdeskyConfig:
 
 
 @dataclass
+class OfnConfig:
+    """Configuration for OFN (Open Formal Norm) scraper."""
+
+    # Request timeout in seconds
+    request_timeout: int = field(
+        default_factory=lambda: int(os.getenv("OFN_REQUEST_TIMEOUT", "30"))
+    )
+
+    # Number of retries for failed requests
+    max_retries: int = field(default_factory=lambda: int(os.getenv("OFN_MAX_RETRIES", "3")))
+
+    # Delay between retries in seconds
+    retry_delay: float = field(default_factory=lambda: float(os.getenv("OFN_RETRY_DELAY", "1.0")))
+
+    # User-Agent header for requests
+    user_agent: str = field(
+        default_factory=lambda: os.getenv(
+            "OFN_USER_AGENT", "ruian2pg-scraper/1.0 (+https://github.com/lksv/ruian2pg)"
+        )
+    )
+
+    # Skip SSL verification (some OFN feeds have invalid certs)
+    skip_ssl_verify: bool = field(
+        default_factory=lambda: os.getenv("OFN_SKIP_SSL_VERIFY", "true").lower()
+        in ("true", "1", "yes")
+    )
+
+
+@dataclass
 class ScraperConfig:
     """General scraper configuration."""
 
@@ -82,3 +111,6 @@ class ScraperConfig:
 
     # eDesky-specific configuration
     edesky: EdeskyConfig = field(default_factory=EdeskyConfig)
+
+    # OFN-specific configuration
+    ofn: OfnConfig = field(default_factory=OfnConfig)

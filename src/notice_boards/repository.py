@@ -1158,6 +1158,92 @@ class DocumentRepository:
         self.conn.commit()
         return updated
 
+    def get_notice_boards_with_ofn(self) -> list[NoticeBoard]:
+        """Get all notice boards with OFN JSON URL.
+
+        Returns:
+            List of NoticeBoard objects with ofn_json_url set.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, municipality_code, name, ico, edesky_url,
+                       edesky_id, edesky_category,
+                       nuts3_id, nuts3_name, nuts4_id, nuts4_name,
+                       edesky_parent_id, edesky_parent_name, data_box_id,
+                       source_url, ofn_json_url
+                FROM notice_boards
+                WHERE ofn_json_url IS NOT NULL AND ofn_json_url != ''
+                ORDER BY name
+                """
+            )
+            return [
+                NoticeBoard(
+                    id=row[0],
+                    municipality_code=row[1],
+                    name=row[2],
+                    ico=row[3],
+                    edesky_url=row[4],
+                    edesky_id=row[5],
+                    edesky_category=row[6],
+                    nuts3_id=row[7],
+                    nuts3_name=row[8],
+                    nuts4_id=row[9],
+                    nuts4_name=row[10],
+                    edesky_parent_id=row[11],
+                    edesky_parent_name=row[12],
+                    data_box_id=row[13],
+                    source_url=row[14],
+                    ofn_json_url=row[15],
+                )
+                for row in cur.fetchall()
+            ]
+
+    def get_notice_board_by_id(self, board_id: int) -> NoticeBoard | None:
+        """Get notice board by database ID.
+
+        Args:
+            board_id: Database ID of the notice board.
+
+        Returns:
+            NoticeBoard or None if not found.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, municipality_code, name, ico, edesky_url,
+                       edesky_id, edesky_category,
+                       nuts3_id, nuts3_name, nuts4_id, nuts4_name,
+                       edesky_parent_id, edesky_parent_name, data_box_id,
+                       source_url, ofn_json_url
+                FROM notice_boards
+                WHERE id = %s
+                """,
+                (board_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+
+            return NoticeBoard(
+                id=row[0],
+                municipality_code=row[1],
+                name=row[2],
+                ico=row[3],
+                edesky_url=row[4],
+                edesky_id=row[5],
+                edesky_category=row[6],
+                nuts3_id=row[7],
+                nuts3_name=row[8],
+                nuts4_id=row[9],
+                nuts4_name=row[10],
+                edesky_parent_id=row[11],
+                edesky_parent_name=row[12],
+                data_box_id=row[13],
+                source_url=row[14],
+                ofn_json_url=row[15],
+            )
+
     def _serialize_metadata(self, metadata: dict[str, Any]) -> str | None:
         """Serialize metadata dict to JSON string for storage."""
         if not metadata:
