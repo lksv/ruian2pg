@@ -130,7 +130,7 @@ uv run ruff check src/ scripts/ tests/
 uv run ruff format src/ scripts/ tests/
 
 # Type check
-uv run mypy src/ruian_import/ scripts/
+uv run mypy src/ruian_import/ src/notice_boards/ scripts/
 ```
 
 ## Usage
@@ -432,6 +432,8 @@ The project includes a module for downloading and processing documents from offi
 # Apply database migrations
 psql -U ruian -d ruian -f scripts/setup_notice_boards_db.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v2.sql
+psql -U ruian -d ruian -f scripts/migrate_notice_boards_v3.sql
+psql -U ruian -d ruian -f scripts/migrate_notice_boards_v4.sql
 ```
 
 ### Fetch Notice Board List
@@ -463,6 +465,21 @@ uv run python scripts/import_notice_boards.py data/notice_boards.json
 uv run python scripts/import_notice_boards.py --stats
 ```
 
+### Generate Test References
+
+Generate test data for validating map rendering:
+
+```bash
+# Generate test references for a cadastral area
+uv run python scripts/generate_test_references.py --cadastral-name "Veveří"
+
+# Generate with custom counts
+uv run python scripts/generate_test_references.py --cadastral-code 610186 --parcels 20 --addresses 15 --streets 5 --buildings 10
+
+# Cleanup test data
+uv run python scripts/generate_test_references.py --cleanup
+```
+
 Example statistics output:
 ```
 Notice Board Statistics:
@@ -482,7 +499,7 @@ This creates tables for:
 - `notice_boards` - Notice board sources (municipalities)
 - `documents` - Downloaded documents
 - `attachments` - Document attachments (PDFs, etc.)
-- `parcel_refs`, `address_refs`, `street_refs` - Extracted references
+- `parcel_refs`, `address_refs`, `street_refs`, `building_refs` - Extracted references
 - Martin function sources for map visualization
 
 ### Validate References

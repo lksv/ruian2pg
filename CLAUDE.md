@@ -4,7 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-RUIAN Import - tool for downloading and importing Czech RUIAN (territorial identification, addresses and real estate registry) data into PostgreSQL/PostGIS.
+**Notice Board Map** - a visualization tool that displays addresses, parcels, and streets referenced in documents published on Czech municipal official notice boards (úřední desky).
+
+**Use cases:**
+- Discover when your municipality is selling or renting land near your property
+- Get notified about real estate auctions in your neighborhood
+- Track construction permits and zoning decisions affecting nearby parcels
+- Find out about street cleaning schedules or road closures on your street
+
+The project imports Czech RUIAN (territorial identification, addresses and real estate registry) data into PostGIS, then extracts location references from notice board documents and visualizes them on an interactive map.
+
+## Documentation
+
+- @README.md - Project overview, installation, usage examples
+- @ARCHITECTURE.md - System architecture, database schema, Python classes
+- @ansible/README.md - Production deployment with Ansible
 
 ## Development Workflow
 
@@ -26,9 +40,6 @@ uv run python -m pytest tests/ -v
 ```bash
 # Install dependencies
 uv sync
-
-# Install with dev dependencies
-uv sync --all-extras
 
 # Lint
 uv run ruff check src/ scripts/ tests/
@@ -66,66 +77,30 @@ uv run python scripts/import_ruian.py --municipalities
 # Fetch notice board list (Česko.Digital + NKOD OFN)
 uv run python scripts/fetch_notice_boards.py -o data/notice_boards.json
 
-# Fetch notice boards (quick, skip OFN)
-uv run python scripts/fetch_notice_boards.py --skip-ofn -o data/notice_boards.json
-
 # Import notice boards to database
 uv run python scripts/import_notice_boards.py data/notice_boards.json
-
-# Show notice board statistics
-uv run python scripts/import_notice_boards.py --stats
 
 # Generate test data for map rendering validation
 uv run python scripts/generate_test_references.py --cadastral-name "Veveří"
 
-# Generate with custom counts
-uv run python scripts/generate_test_references.py --cadastral-code 610186 --parcels 20 --addresses 15 --streets 5 --buildings 10
-
 # Cleanup test data
 uv run python scripts/generate_test_references.py --cleanup
+
+# Apply database migrations
+psql -U ruian -d ruian -f scripts/setup_notice_boards_db.sql
+psql -U ruian -d ruian -f scripts/migrate_notice_boards_v2.sql
+psql -U ruian -d ruian -f scripts/migrate_notice_boards_v3.sql
+psql -U ruian -d ruian -f scripts/migrate_notice_boards_v4.sql
 ```
 
 ## Architecture
 
-```
-src/ruian_import/
-├── config.py      # DatabaseConfig, DownloadConfig dataclasses
-├── downloader.py  # RuianDownloader - fetches VFR files from CUZK
-└── importer.py    # RuianImporter - imports VFR to PostGIS via ogr2ogr
-
-src/notice_boards/
-├── config.py      # DatabaseConfig, StorageConfig, get_db_connection()
-├── models.py      # Dataclasses for DB entities
-├── storage.py     # StorageBackend ABC, FilesystemStorage
-├── validators.py  # RuianValidator - validate parcel/address/street refs
-├── parsers/
-│   ├── base.py        # TextExtractor ABC
-│   ├── pdf.py         # PdfTextExtractor, PdfPlumberExtractor
-│   └── references.py  # ParcelRef, AddressRef, StreetRef dataclasses (stubs)
-└── scrapers/
-    └── base.py        # NoticeBoardScraper ABC (stub for future)
-
-scripts/
-├── download_ruian.py            # CLI for downloading RUIAN
-├── import_ruian.py              # CLI for importing RUIAN
-├── fetch_notice_boards.py       # Fetch notice boards from APIs (Česko.Digital, NKOD)
-├── import_notice_boards.py      # Import notice boards JSON to database
-├── generate_test_references.py  # Generate test data for map rendering validation
-├── setup_notice_boards_db.sql   # DB migration for notice boards
-├── migrate_notice_boards_v2.sql # Migration v2: adds nutslau, coat_of_arms_url
-├── migrate_notice_boards_v3.sql # Migration v3: adds building_refs table
-└── migrate_notice_boards_v4.sql # Migration v4: optimizes tile functions for spatial index
-
-tests/
-├── test_config.py              # Tests for RUIAN configuration
-├── test_downloader.py          # Tests for RUIAN downloader
-├── test_importer.py            # Tests for RUIAN importer
-├── test_notice_board_scripts.py # Tests for notice board fetch/import scripts
-├── test_storage.py             # Tests for notice_boards storage
-└── test_validators.py          # Tests for notice_boards validators
-```
-
 **Data flow:** CUZK API → `RuianDownloader` → `data/*.xml.zip` → `RuianImporter` (ogr2ogr) → PostGIS
+
+**Source modules:**
+- `src/ruian_import/` - Core RUIAN download and import (config, downloader, importer)
+- `src/notice_boards/` - Notice board document processing (validators, storage, parsers, scrapers)
+- `scripts/` - CLI tools and SQL migrations
 
 **File types:**
 - `*_ST_UKSH.xml.zip` - State-level data (regions, districts)
@@ -149,77 +124,25 @@ Coordinate system: S-JTSK / Krovak East North (EPSG:5514)
 
 Interactive map viewer using MapLibre GL JS and Martin tile server.
 
-### Directory Structure
-
-```
-web/
-└── index.html          # MapLibre frontend with layer controls
-
-martin/
-└── martin.yaml         # Martin tile server configuration
-
-scripts/
-└── setup_indexes.sql   # Spatial indexes for tile performance
-```
-
-### Start Web Map Services
-
 ```bash
 # Start Martin tile server
 podman run -d --name martin -p 3000:3000 \
   -v ./martin/martin.yaml:/config.yaml:ro \
   ghcr.io/maplibre/martin --config /config.yaml
 
-# Start with debug logging (verbose startup info)
-podman run -d --name martin -p 3000:3000 \
-  -e RUST_LOG=debug \
-  -v ./martin/martin.yaml:/config.yaml:ro \
-  ghcr.io/maplibre/martin --config /config.yaml
-
 # Serve frontend (development)
 cd web && python3 -m http.server 8080
 
-# Open http://localhost:8080
-```
-
-### Martin Commands
-
-```bash
 # Check health
 curl http://localhost:3000/health
 
 # List sources
 curl http://localhost:3000/catalog
-
-# Test tile (Brno area, zoom 10)
-curl -o /tmp/tile.pbf http://localhost:3000/obce/10/559/351
-
-# View logs
-podman logs martin
-
-# Restart after config change
-podman restart martin
 ```
 
-### Tile Server Configuration
+**RUIAN base layers:** `adresnimista`, `stavebniobjekty`, `parcely`, `ulice`, `obce`, `okresy`
 
-The `martin/martin.yaml` configures which tables and geometry columns to serve:
-
-**RUIAN base layers:**
-- `adresnimista` - address points (`geom`)
-- `stavebniobjekty` - buildings (`originalnihranice`)
-- `parcely` - parcels (`originalnihranice`)
-- `ulice` - streets (`geom`)
-- `obce` - municipalities (`originalnihranice`)
-- `okresy` - districts (`generalizovanehranice`)
-
-**Document reference layers** (function sources):
-- `parcels_with_documents` - parcels referenced in notice board documents (red)
-- `addresses_with_documents` - addresses referenced in documents (magenta)
-- `streets_with_documents` - streets referenced in documents (orange)
-- `buildings_with_documents` - buildings referenced in documents (cyan)
-
-Note: Recommended PostGIS 3.5+ for correct tile rendering. The functions transform EPSG:5514 to EPSG:3857 for tile generation.
+**Document reference layers (function sources):** `parcels_with_documents`, `addresses_with_documents`, `streets_with_documents`, `buildings_with_documents`
 
 ### Spatial Index Best Practices
 
@@ -233,104 +156,20 @@ WHERE ST_Transform(p.geom, 3857) && ST_TileEnvelope(z, x, y)
 WHERE p.geom && ST_Transform(ST_TileEnvelope(z, x, y), 5514)
 ```
 
-The wrong pattern causes sequential scan + transformation of millions of rows per tile request. The correct pattern transforms 1 bbox and uses the spatial index.
-
 ## Notice Board Documents
 
-System for downloading documents from official notice boards of municipalities, parsing references to parcels/addresses/streets and displaying them on a map.
+System for downloading documents from official notice boards, parsing references to parcels/addresses/streets and displaying them on a map.
 
-### Database Schema
+**Key classes:**
+- `RuianValidator` (`src/notice_boards/validators.py`) - Validate parcel/address/street/building references against RUIAN
+- `StorageBackend` (`src/notice_boards/storage.py`) - Abstract interface for storing attachments (FilesystemStorage implementation)
+- `TextExtractor` (`src/notice_boards/parsers/base.py`) - Extract text from PDFs (PdfTextExtractor, PdfPlumberExtractor)
 
-```bash
-# Apply migrations
-psql -U ruian -d ruian -f scripts/setup_notice_boards_db.sql
-psql -U ruian -d ruian -f scripts/migrate_notice_boards_v2.sql
-psql -U ruian -d ruian -f scripts/migrate_notice_boards_v3.sql
-psql -U ruian -d ruian -f scripts/migrate_notice_boards_v4.sql
-```
-
-Tables created:
-- `notice_boards` - Notice board sources (municipalities)
-- `document_types` - Document type classification
-- `documents` - Downloaded documents
-- `attachments` - Document attachments (PDFs, etc.)
-- `ref_types` - Reference type classification
-- `parcel_refs` - Parcel references extracted from documents
-- `address_refs` - Address references extracted from documents
-- `street_refs` - Street references extracted from documents
-- `building_refs` - Building references extracted from documents
-- `lv_refs` - Ownership sheet references
-
-Martin function sources:
-- `parcels_with_documents(z, x, y)` - Parcels with document references
-- `streets_with_documents(z, x, y)` - Streets with document references
-- `addresses_with_documents(z, x, y)` - Addresses with document references
-- `buildings_with_documents(z, x, y)` - Buildings with document references
-
-### Key Classes
-
-**RuianValidator** (`src/notice_boards/validators.py`):
-- `validate_parcel(cadastral_area_code/name, parcel_number, parcel_sub_number)` - Check if parcel exists in RUIAN
-- `validate_address(municipality_code/name, street_code/name, house_number, orientation_number)` - Check if address exists
-- `validate_street(municipality_code/name, street_name)` - Check if street exists
-- `validate_building(building_code, municipality_code/name, part_of_municipality_name, house_number)` - Check if building exists
-- `find_cadastral_area(name/code)` - Lookup cadastral area
-- `find_municipality(name/code)` - Lookup municipality
-
-**StorageBackend** (`src/notice_boards/storage.py`):
-- Abstract interface for storing attachments
-- `FilesystemStorage` - Local filesystem implementation
-- Methods: `save()`, `load()`, `exists()`, `delete()`, `get_url()`, `compute_hash()`
-
-**TextExtractor** (`src/notice_boards/parsers/base.py`):
-- Abstract interface for extracting text from documents
-- `PdfTextExtractor` - Extract text from PDFs with text layer (PyMuPDF)
-- `PdfPlumberExtractor` - Alternative PDF extractor (pdfplumber)
-
-### Usage Example
-
-```python
-from notice_boards.validators import RuianValidator
-from notice_boards.config import get_db_connection
-from notice_boards.storage import FilesystemStorage
-from pathlib import Path
-
-# Validate parcel
-validator = RuianValidator(get_db_connection())
-result = validator.validate_parcel(
-    cadastral_area_name="Veveří",
-    parcel_number=592,
-    parcel_sub_number=2
-)
-if result.is_valid:
-    print(f"Found parcel ID: {result.parcel_id}")
-
-# Store attachment
-storage = FilesystemStorage(Path("data/attachments"))
-storage.save("2024/01/doc123/file.pdf", pdf_bytes)
-```
-
-### Implementation Status
-
-- ✅ Database schema (all tables and indexes)
-- ✅ StorageBackend + FilesystemStorage
-- ✅ RuianValidator (parcel, address, street validation)
-- ✅ TextExtractor + PDF extractors
-- ✅ Martin function sources for map (with SRID transformation)
-- ✅ Notice board list fetcher (Česko.Digital + NKOD OFN APIs)
-- ✅ Notice board importer (JSON → PostgreSQL)
-- ✅ Test data generator (`generate_test_references.py`)
-- ✅ Web map with document reference layers
-- ⏳ Reference extractors (stub - will use LLM)
-- ⏳ Scrapers (stub - not implemented yet)
+**Database tables:** `notice_boards`, `documents`, `attachments`, `parcel_refs`, `address_refs`, `street_refs`, `building_refs`, `lv_refs`
 
 ## Production Deployment
 
-Automated deployment to production server using Ansible.
-
-See **[ansible/README.md](ansible/README.md)** for full documentation.
-
-### Quick Deploy
+Automated deployment using Ansible. See **[ansible/README.md](ansible/README.md)** for full documentation.
 
 ```bash
 cd ansible
@@ -343,30 +182,4 @@ ansible-playbook playbooks/site.yml --vault-password-file .vault_pass --tags ngi
 ansible-playbook playbooks/site.yml --vault-password-file .vault_pass --tags postgresql,martin
 ```
 
-### Stack Components
-
-- **PostgreSQL/PostGIS** - Database container with migrations
-- **Martin** - Vector tile server
-- **Nginx** - Reverse proxy with tile caching
-- **Certbot** - Let's Encrypt SSL certificates (auto-renewal)
-
-### Ansible Directory Structure
-
-```
-ansible/
-├── inventory/
-│   ├── hosts.yml                    # Server inventory
-│   └── group_vars/all/
-│       ├── main.yml                 # Variables
-│       └── vault.yml                # Encrypted secrets
-├── playbooks/
-│   └── site.yml                     # Main playbook
-└── roles/
-    ├── common/                      # Base system setup
-    ├── docker/                      # Docker installation
-    ├── ruian_app/                   # Application code
-    ├── postgresql/                  # Database + migrations
-    ├── martin/                      # Tile server
-    ├── nginx/                       # Web server
-    └── certbot/                     # SSL certificates
-```
+**Stack:** PostgreSQL/PostGIS, Martin tile server, Nginx (with tile caching), Certbot (Let's Encrypt SSL)
