@@ -283,10 +283,10 @@
 
         // Configuration - change TILE_SERVER_URL for production
         const CONFIG = {
-            // For local development
-            TILE_SERVER_URL: 'http://localhost:3000',
-            // For production (uncomment and adjust)
-            // TILE_SERVER_URL: 'http://46.224.67.103:3000',
+            // Automatically detect tile server URL based on hostname
+            TILE_SERVER_URL: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+                ? 'http://localhost:3000'
+                : `http://${window.location.hostname}:3000`,
 
             // Initial map center (Brno - sample data location)
             CENTER: [16.59, 49.21],
