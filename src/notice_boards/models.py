@@ -42,6 +42,15 @@ class NoticeBoard:
     scrape_interval_hours: int = 24
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # eDesky integration fields (migration v5)
+    edesky_id: int | None = None
+    edesky_category: str | None = None
+    nuts3_id: int | None = None
+    nuts3_name: str | None = None
+    nuts4_id: int | None = None
+    nuts4_name: str | None = None
+    edesky_parent_id: int | None = None
+    edesky_parent_name: str | None = None
 
 
 @dataclass
@@ -76,6 +85,10 @@ class Document:
     parse_error: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # eDesky integration fields (migration v5)
+    edesky_url: str | None = None
+    orig_url: str | None = None
+    extracted_text_path: str | None = None
 
 
 @dataclass
@@ -95,6 +108,8 @@ class Attachment:
     parse_error: str | None = None
     position: int = 0
     created_at: datetime | None = None
+    # eDesky integration fields (migration v5)
+    orig_url: str | None = None
 
 
 @dataclass

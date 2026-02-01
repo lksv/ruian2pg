@@ -60,3 +60,7 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["fitz", "pdfplumber"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["dotenv"]
+ignore_missing_imports = true
