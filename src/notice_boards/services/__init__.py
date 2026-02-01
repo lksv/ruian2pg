@@ -8,8 +8,10 @@ from notice_boards.services.attachment_downloader import (
     PendingAttachment,
 )
 from notice_boards.services.text_extractor import (
+    ExtractionConfig,
     ExtractionResult,
     ExtractionStats,
+    PendingExtraction,
     TextExtractionService,
 )
 
@@ -18,8 +20,10 @@ __all__ = [
     "DownloadConfig",
     "DownloadResult",
     "DownloadStats",
+    "ExtractionConfig",
     "ExtractionResult",
     "ExtractionStats",
     "PendingAttachment",
+    "PendingExtraction",
     "TextExtractionService",
 ]

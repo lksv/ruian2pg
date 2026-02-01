@@ -32,6 +32,34 @@ class DownloadStatus:
     TERMINAL = (DOWNLOADED, REMOVED)
 
 
+class ParseStatus:
+    """Constants for attachment text extraction lifecycle states.
+
+    State transitions:
+        pending → parsing (extraction starts)
+        parsing → completed (extraction success)
+        parsing → failed (extraction error, can retry)
+        pending → skipped (unsupported type, too large)
+        pending → failed (streaming download error)
+        failed → pending (reset for retry)
+    """
+
+    PENDING = "pending"
+    PARSING = "parsing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+    # All valid statuses
+    ALL = (PENDING, PARSING, COMPLETED, FAILED, SKIPPED)
+
+    # Terminal states (no further processing)
+    TERMINAL = (COMPLETED, SKIPPED)
+
+    # Retryable states
+    RETRYABLE = (FAILED,)
+
+
 @dataclass
 class NoticeBoard:
     """Notice board source - a municipality or public authority."""

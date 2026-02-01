@@ -66,6 +66,7 @@ psql -U ruian -d ruian -f scripts/migrate_notice_boards_v4.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v5.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v6.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v7.sql
+psql -U ruian -d ruian -f scripts/migrate_notice_boards_v8.sql
 
 # Generate test data for map rendering
 uv run python scripts/generate_test_references.py --cadastral-name "Veveří"
@@ -209,6 +210,120 @@ content = downloader.get_attachment_content(attachment_id=123, persist=True)
 # - Loads from storage if available
 # - Downloads from orig_url if not stored
 # - persist=True saves to storage after download
+```
+
+### Text Extraction
+
+Extract text from document attachments using Docling (with OCR support) or fallback extractors (PyMuPDF, pdfplumber).
+
+**Parse Status Lifecycle:**
+- `pending` - awaiting extraction (default)
+- `parsing` - extraction in progress
+- `completed` - text successfully extracted
+- `failed` - extraction failed (can be retried)
+- `skipped` - intentionally skipped (unsupported type)
+
+```bash
+# Show statistics
+uv run python scripts/extract_text.py --stats
+
+# Show statistics by MIME type
+uv run python scripts/extract_text.py --stats-by-mime
+
+# Extract from stored files only (recommended)
+uv run python scripts/extract_text.py --all --only-downloaded
+
+# Streaming mode (download and extract without persisting)
+uv run python scripts/extract_text.py --all
+
+# Stream + persist file after extraction
+uv run python scripts/extract_text.py --all --persist
+
+# Extract for specific board
+uv run python scripts/extract_text.py --board-id 123
+
+# Single attachment
+uv run python scripts/extract_text.py --attachment-id 456
+
+# Date filters
+uv run python scripts/extract_text.py --all --published-after 2024-01-01
+
+# Disable OCR (faster)
+uv run python scripts/extract_text.py --all --no-ocr
+
+# Force full-page OCR for scanned documents
+uv run python scripts/extract_text.py --all --force-ocr
+
+# Use specific OCR backend (default: tesserocr)
+# tesserocr - best for Czech (requires tesseract-ocr system package)
+# ocrmac - macOS only (uses Apple Vision, no extra deps)
+# easyocr - cross-platform (slower, auto-downloads models)
+uv run python scripts/extract_text.py --all --ocr-backend ocrmac
+
+# Dry run (list pending without extracting)
+uv run python scripts/extract_text.py --dry-run --limit 50
+
+# Reset failed to pending
+uv run python scripts/extract_text.py --reset-failed
+
+# Reset failed and skipped
+uv run python scripts/extract_text.py --reset-all
+```
+
+**Library usage:**
+```python
+from notice_boards.services import TextExtractionService, AttachmentDownloader
+from notice_boards.services.text_extractor import ExtractionConfig
+from notice_boards.config import get_db_connection
+from pathlib import Path
+
+conn = get_db_connection()
+downloader = AttachmentDownloader(conn, Path("data/attachments"))
+
+# Configure extraction
+config = ExtractionConfig(
+    use_ocr=True,
+    ocr_backend="tesserocr",  # or "ocrmac" (macOS), "easyocr"
+    force_full_page_ocr=False,
+    output_format="markdown",  # or "text", "html"
+    max_file_size_bytes=100 * 1024 * 1024,  # 100 MB
+)
+
+service = TextExtractionService(conn, downloader, config)
+
+# Get statistics
+stats = service.get_stats()
+print(f"Pending: {stats['pending']}, Completed: {stats['completed']}")
+
+# Extract single attachment
+result = service.extract_text(attachment_id=123, persist_attachment=True)
+if result.success:
+    print(f"Extracted {result.text_length} chars")
+
+# Batch extraction with progress callback
+def on_progress(result):
+    status = "OK" if result.success else f"FAIL: {result.error}"
+    print(f"  {result.attachment_id}: {status}")
+
+stats = service.extract_batch(
+    only_downloaded=True,  # Only from stored files
+    limit=100,
+    on_progress=on_progress,
+)
+print(f"Extracted: {stats.extracted}, Failed: {stats.failed}")
+
+# Status management
+service.reset_to_pending(failed_only=True)  # Reset failed
+service.reset_to_pending(failed_only=False)  # Reset failed + skipped
+```
+
+**Note:** Docling is installed as a main dependency. For OCR on Linux, install system packages:
+```bash
+# Ubuntu/Debian
+sudo apt install tesseract-ocr tesseract-ocr-ces libtesseract-dev
+
+# macOS (use ocrmac backend instead - no extra deps needed)
+uv run python scripts/extract_text.py --all --ocr-backend ocrmac
 ```
 
 ### Production: Full Notice Board Reload

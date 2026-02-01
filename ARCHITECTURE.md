@@ -350,6 +350,7 @@ from notice_boards.models import (
     StreetRef,        # Extracted street reference
     LvRef,            # Extracted ownership sheet reference
     DownloadStatus,   # Constants for attachment download lifecycle
+    ParseStatus,      # Constants for text extraction lifecycle
 )
 
 # Example: Document
@@ -375,6 +376,15 @@ DownloadStatus.FAILED      # 'failed' - can retry
 DownloadStatus.REMOVED     # 'removed' - skip (terminal)
 DownloadStatus.ALL         # ('pending', 'downloaded', 'failed', 'removed')
 DownloadStatus.TERMINAL    # ('downloaded', 'removed')
+
+# ParseStatus constants (text extraction lifecycle)
+ParseStatus.PENDING    # 'pending' - awaiting extraction
+ParseStatus.PARSING    # 'parsing' - extraction in progress
+ParseStatus.COMPLETED  # 'completed' - text extracted
+ParseStatus.FAILED     # 'failed' - can retry
+ParseStatus.SKIPPED    # 'skipped' - unsupported type (terminal)
+ParseStatus.ALL        # All valid statuses
+ParseStatus.TERMINAL   # ('completed', 'skipped')
 ```
 
 #### RuianValidator (`validators.py`)
@@ -452,26 +462,36 @@ hash = storage.compute_hash(content)  # SHA-256
 
 #### TextExtractor (`parsers/`)
 
-Extract text from PDF documents.
+Extract text from documents (PDF, Office, images with OCR).
 
 ```python
-from notice_boards.parsers.pdf import PdfTextExtractor, PdfPlumberExtractor
-from notice_boards.parsers.base import CompositeTextExtractor
+from notice_boards.parsers import create_default_extractor
+from notice_boards.parsers.docling_extractor import DoclingExtractor, DoclingConfig
 
-# Single extractor
-extractor = PdfTextExtractor()  # Uses PyMuPDF
-if extractor.supports("application/pdf"):
-    text = extractor.extract(pdf_bytes, "application/pdf")
-
-# Alternative extractor (better for tables)
-extractor = PdfPlumberExtractor()
+# Recommended: Use factory function with fallback chain
+# Docling (if available) → PyMuPDF → pdfplumber
+extractor = create_default_extractor(
+    use_ocr=True,
+    ocr_backend="tesserocr",  # or "ocrmac" (macOS), "easyocr"
+)
 text = extractor.extract(pdf_bytes, "application/pdf")
 
-# Composite (tries multiple extractors)
-composite = CompositeTextExtractor()
-composite.register(PdfTextExtractor())
-composite.register(PdfPlumberExtractor())
-text = composite.extract(content, mime_type)
+# Direct Docling usage (best quality, OCR support)
+config = DoclingConfig(
+    use_ocr=True,
+    ocr_backend="tesserocr",
+    ocr_languages=["cs-CZ", "en-US"],
+    output_format="markdown",
+)
+docling = DoclingExtractor(config)
+if docling.supports("application/pdf"):
+    text = docling.extract(pdf_bytes, "application/pdf")
+
+# Fallback extractors (no OCR)
+from notice_boards.parsers.pdf import PdfTextExtractor, PdfPlumberExtractor
+
+extractor = PdfTextExtractor()   # Fast, text-layer only
+extractor = PdfPlumberExtractor()  # Better for tables
 ```
 
 #### eDesky Integration (`scrapers/edesky.py`)
@@ -644,37 +664,48 @@ content = downloader.get_attachment_content(attachment_id=123, persist=True)
 
 #### TextExtractionService (`services/text_extractor.py`)
 
-Service for extracting text from document attachments. Uses `AttachmentDownloader.get_attachment_content()` as unified API for content access.
-
-**Note:** This is a placeholder for future implementation.
+Service for extracting text from document attachments using Docling (with OCR) or fallback extractors.
 
 ```python
 from notice_boards.services import TextExtractionService, AttachmentDownloader
+from notice_boards.services.text_extractor import ExtractionConfig
 from notice_boards.config import get_db_connection
 from pathlib import Path
 
 conn = get_db_connection()
 downloader = AttachmentDownloader(conn, Path("data/attachments"))
-service = TextExtractionService(conn, downloader)
 
-# Extract text (auto-downloads if needed, doesn't persist file)
-text = service.extract_text(attachment_id=123, persist_attachment=False)
+# Configure with OCR
+config = ExtractionConfig(
+    use_ocr=True,
+    ocr_backend="tesserocr",  # or "ocrmac" (macOS), "easyocr"
+    output_format="markdown",
+)
+service = TextExtractionService(conn, downloader, config)
 
-# Extract and also save the attachment
-text = service.extract_text(attachment_id=123, persist_attachment=True)
+# Extract text (auto-downloads if needed)
+result = service.extract_text(attachment_id=123, persist_attachment=False)
+if result.success:
+    print(f"Extracted {result.text_length} chars")
 
-# Batch extraction with date filters
+# Batch extraction
 stats = service.extract_batch(
-    persist_attachments=False,  # Stream mode - no file storage
-    published_after=date(2024, 1, 1),
+    only_downloaded=True,  # Only from stored files
     limit=100,
 )
 print(f"Extracted: {stats.extracted}, Failed: {stats.failed}")
+
+# Status management
+service.reset_to_pending(failed_only=True)
 ```
 
 **Key methods:**
 - `extract_text()` - Extract text from single attachment
 - `extract_batch()` - Process multiple pending attachments
+- `mark_parsing/completed/failed/skipped()` - Status transitions
+- `reset_to_pending()` - Reset failed/skipped for retry
+- `get_stats()` - Get extraction statistics
+- `get_stats_by_mime_type()` - Stats grouped by MIME type
 
 **Workflow integration:**
 
@@ -804,7 +835,7 @@ ruian2pg/
 │   │
 │   └── notice_boards/          # Notice board module
 │       ├── config.py           # DatabaseConfig, StorageConfig
-│       ├── models.py           # Dataclasses (NoticeBoard, Document, DownloadStatus, ...)
+│       ├── models.py           # Dataclasses (NoticeBoard, Document, DownloadStatus, ParseStatus, ...)
 │       ├── storage.py          # StorageBackend, FilesystemStorage
 │       ├── validators.py       # RuianValidator
 │       ├── repository.py       # DocumentRepository (DB operations)
@@ -812,10 +843,11 @@ ruian2pg/
 │       ├── services/
 │       │   ├── __init__.py     # Service exports
 │       │   ├── attachment_downloader.py  # AttachmentDownloader
-│       │   └── text_extractor.py         # TextExtractionService (placeholder)
+│       │   └── text_extractor.py         # TextExtractionService
 │       ├── parsers/
 │       │   ├── base.py         # TextExtractor ABC
 │       │   ├── pdf.py          # PdfTextExtractor, PdfPlumberExtractor
+│       │   ├── docling_extractor.py  # DoclingExtractor (OCR support)
 │       │   └── references.py   # Reference dataclasses (stub)
 │       └── scrapers/
 │           ├── base.py         # NoticeBoardScraper ABC
@@ -830,6 +862,7 @@ ruian2pg/
 │   ├── sync_edesky_boards.py   # CLI: sync with eDesky.cz
 │   ├── download_ofn_documents.py    # CLI: download OFN documents
 │   ├── download_attachments.py      # CLI: download attachment files
+│   ├── extract_text.py              # CLI: extract text from attachments
 │   ├── generate_test_references.py  # Generate test data
 │   ├── setup_notice_boards_db.sql   # Initial schema
 │   ├── migrate_notice_boards_v2.sql # Migration: nutslau, coat_of_arms
@@ -838,6 +871,7 @@ ruian2pg/
 │   ├── migrate_notice_boards_v5.sql # Migration: eDesky fields
 │   ├── migrate_notice_boards_v6.sql # Migration: remove ICO unique
 │   ├── migrate_notice_boards_v7.sql # Migration: download_status
+│   ├── migrate_notice_boards_v8.sql # Migration: parse_status states
 │   └── setup_indexes.sql       # Spatial indexes
 │
 ├── web/

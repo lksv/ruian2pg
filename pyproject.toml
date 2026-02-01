@@ -9,6 +9,7 @@ dependencies = [
     "psycopg2-binary>=2.9.9",
     "lxml>=5.1.0",
     "pydantic>=2.0.0",
+    "docling>=2.71.0",
 ]
 
 [project.optional-dependencies]
@@ -21,6 +22,13 @@ dev = [
 pdf = [
     "pymupdf>=1.24.0",
     "pdfplumber>=0.11.0",
+]
+docling = [
+    "docling>=2.70.0",
+]
+docling-ocr = [
+    "docling>=2.70.0",
+    "easyocr>=1.7.0",
 ]
 
 [project.scripts]
@@ -59,6 +67,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["fitz", "pdfplumber"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["docling", "docling.*", "easyocr"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

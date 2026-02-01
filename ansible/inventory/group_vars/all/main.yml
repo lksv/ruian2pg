@@ -75,6 +75,11 @@ common_packages:
   # RUIAN dependencies
   - gdal-bin
   - postgresql-client
+  # OCR / text extraction (for tesserocr)
+  - tesseract-ocr
+  - tesseract-ocr-ces
+  - libtesseract-dev
+  - libleptonica-dev
   # Utilities
   - htop
   - tmux
