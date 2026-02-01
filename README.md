@@ -434,6 +434,7 @@ psql -U ruian -d ruian -f scripts/setup_notice_boards_db.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v2.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v3.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v4.sql
+psql -U ruian -d ruian -f scripts/migrate_notice_boards_v5.sql
 ```
 
 ### Fetch Notice Board List
@@ -464,6 +465,41 @@ uv run python scripts/import_notice_boards.py data/notice_boards.json
 # Show database statistics
 uv run python scripts/import_notice_boards.py --stats
 ```
+
+### Sync with eDesky.cz
+
+[eDesky.cz](https://edesky.cz) aggregates 6,400+ official notice boards from Czech municipalities. The sync script fetches metadata and enriches existing records with NUTS3/NUTS4 region info, coordinates, and parent hierarchy.
+
+```bash
+# Set API key (get from https://edesky.cz/uzivatel/edit)
+export EDESKY_API_KEY=your_api_key
+
+# Sync ALL boards with smart matching (updates existing + creates new)
+uv run python scripts/sync_edesky_boards.py --all --match-existing
+
+# Preview what would happen (dry-run)
+uv run python scripts/sync_edesky_boards.py --all --match-existing --dry-run
+
+# Show statistics
+uv run python scripts/sync_edesky_boards.py --stats
+
+# Verbose output (shows each match)
+uv run python scripts/sync_edesky_boards.py --all --match-existing --verbose
+```
+
+**Matching algorithm** (in priority order):
+1. **edesky_id** - exact match if already synced
+2. **edesky_url** - extract ID from URL in database
+3. **ICO** - match by organization ID (unique per municipality)
+4. **Name + district** - fallback for ambiguous cases
+
+**Fields synced from eDesky:**
+- `edesky_id`, `edesky_url` - eDesky identifiers
+- `edesky_category` - type (obec, mesto, kraj, etc.)
+- `nuts3_id/name` - region (Jihočeský kraj, etc.)
+- `nuts4_id/name` - district (Okres České Budějovice, etc.)
+- `edesky_parent_id/name` - parent board in hierarchy
+- `latitude`, `longitude` - coordinates
 
 ### Generate Test References
 

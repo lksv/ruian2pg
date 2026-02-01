@@ -363,6 +363,89 @@ composite.register(PdfPlumberExtractor())
 text = composite.extract(content, mime_type)
 ```
 
+#### eDesky Integration (`scrapers/edesky.py`)
+
+Clients for fetching notice board metadata and documents from eDesky.cz.
+
+```python
+from notice_boards.scrapers.edesky import (
+    EdeskyApiClient,    # API client for /api/v1/dashboards
+    EdeskyXmlClient,    # XML client for /desky/{id}.xml
+    EdeskyScraper,      # Document scraper
+    EdeskyDashboard,    # Notice board metadata
+    EdeskyDocument,     # Document with attachments
+)
+from notice_boards.scraper_config import EdeskyConfig
+
+# API client for notice board metadata (requires API key)
+config = EdeskyConfig()  # Uses EDESKY_API_KEY env var
+with EdeskyApiClient(config) as client:
+    # Fetch all boards from a region with subordinates
+    dashboards = client.get_dashboards(edesky_id=112, include_subordinated=True)
+
+    # Fetch ALL boards (iterates through Čechy + Morava)
+    all_boards = client.get_all_dashboards()
+
+    for board in dashboards:
+        print(f"{board.name} (ID: {board.edesky_id})")
+        print(f"  Region: {board.nuts3_name}, District: {board.nuts4_name}")
+
+# XML client for documents (no API key needed)
+with EdeskyXmlClient() as client:
+    documents = client.get_documents(edesky_id=62)
+    for doc in documents:
+        print(f"{doc.name}: {len(doc.attachments)} attachments")
+
+    # Download extracted text
+    text = client.get_document_text(doc.edesky_url)
+```
+
+#### DocumentRepository (`repository.py`)
+
+Database operations for scraped documents with upsert logic.
+
+```python
+from pathlib import Path
+from notice_boards.repository import DocumentRepository, create_document_repository
+from notice_boards.config import get_db_connection
+
+# Create with storage backends
+repo = create_document_repository(
+    conn=get_db_connection(),
+    attachments_path=Path("data/attachments"),
+    text_path=Path("data/documents"),
+)
+
+# Upsert document (INSERT or UPDATE on conflict)
+doc_id = repo.upsert_document(notice_board_id=1, doc_data=doc_data)
+
+# Upsert attachment with file storage
+att_id = repo.upsert_attachment(document_id=doc_id, att_data=att_data)
+
+# Get existing external IDs for incremental updates
+existing = repo.get_existing_external_ids(notice_board_id=1)
+
+# Notice board lookups for matching
+board = repo.get_notice_board_by_edesky_id(62)
+board = repo.get_notice_board_by_edesky_url("https://edesky.cz/desky/62")
+boards = repo.get_notice_boards_by_ico("00064581")
+boards = repo.get_notice_boards_by_name_and_district("Brno", "Brno-město")
+
+# Update eDesky metadata
+repo.update_notice_board_edesky_fields(
+    board_id=1,
+    edesky_id=62,
+    edesky_url="https://edesky.cz/desky/62",
+    category="obec",
+    nuts3_id=116, nuts3_name="Jihomoravský kraj",
+    nuts4_id=3702, nuts4_name="Okres Brno-město",
+)
+
+# Statistics
+stats = repo.get_notice_board_stats()
+print(f"Total: {stats['total']}, With eDesky ID: {stats['with_edesky_id']}")
+```
+
 ### Configuration (`config.py`)
 
 Both modules use dataclass-based configuration with environment variable support:
@@ -381,6 +464,12 @@ from notice_boards.config import DatabaseConfig, StorageConfig, get_db_connectio
 
 storage = StorageConfig()  # NOTICE_BOARDS_STORAGE_PATH
 conn = get_db_connection()  # Returns psycopg2 connection
+
+# eDesky scraper config
+from notice_boards.scraper_config import EdeskyConfig, ScraperConfig
+
+edesky = EdeskyConfig()  # EDESKY_API_KEY, EDESKY_BASE_URL, etc.
+scraper = ScraperConfig()  # General scraper settings (max_documents, etc.)
 ```
 
 ## Coordinate Systems

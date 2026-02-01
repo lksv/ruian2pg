@@ -60,10 +60,30 @@ psql -U ruian -d ruian -f scripts/setup_notice_boards_db.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v2.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v3.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v4.sql
+psql -U ruian -d ruian -f scripts/migrate_notice_boards_v5.sql
 
 # Generate test data for map rendering
 uv run python scripts/generate_test_references.py --cadastral-name "Veveří"
 uv run python scripts/generate_test_references.py --cleanup
+```
+
+### eDesky.cz Integration
+
+```bash
+# Set API key (get from https://edesky.cz/uzivatel/edit)
+export EDESKY_API_KEY=your_api_key
+
+# Sync ALL boards from eDesky with smart matching
+uv run python scripts/sync_edesky_boards.py --all --match-existing
+
+# Preview sync without changes (dry-run)
+uv run python scripts/sync_edesky_boards.py --all --match-existing --dry-run
+
+# Show statistics
+uv run python scripts/sync_edesky_boards.py --stats
+
+# Verbose output
+uv run python scripts/sync_edesky_boards.py --all --match-existing --verbose
 ```
 
 ### Local Development Services
@@ -127,6 +147,9 @@ WHERE p.geom && ST_Transform(ST_TileEnvelope(z, x, y), 5514)
 - `RuianValidator` (`src/notice_boards/validators.py`) - validates parcel/address/street references against RUIAN
 - `StorageBackend` (`src/notice_boards/storage.py`) - abstract attachment storage (FilesystemStorage impl)
 - `TextExtractor` (`src/notice_boards/parsers/base.py`) - PDF text extraction
+- `EdeskyApiClient` (`src/notice_boards/scrapers/edesky.py`) - eDesky.cz API client for notice board metadata
+- `EdeskyScraper` (`src/notice_boards/scrapers/edesky.py`) - scraper for eDesky documents
+- `DocumentRepository` (`src/notice_boards/repository.py`) - database operations for documents/attachments
 
 ## Database Tables
 
