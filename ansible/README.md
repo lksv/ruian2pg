@@ -111,6 +111,31 @@ docker exec ruian-postgis psql -U ruian -d ruian -c 'SELECT COUNT(*) FROM obce;'
 
 Open https://lksvrocks.cz/ in your browser to view the map.
 
+### Scheduled Tasks
+
+The following tasks run automatically via systemd timers:
+
+| Timer | Schedule | Description |
+|-------|----------|-------------|
+| `certbot.timer` | 2x daily | Renew Let's Encrypt SSL certificates |
+| `ruian-ofn-sync.timer` | Every 4 hours | Download OFN notice board document metadata |
+
+Manage timers:
+
+```bash
+# List all active timers
+systemctl list-timers
+
+# Check OFN sync status
+systemctl status ruian-ofn-sync.timer
+
+# View recent logs
+journalctl -u ruian-ofn-sync.service --since "1 day ago"
+
+# Trigger manual run
+sudo systemctl start ruian-ofn-sync.service
+```
+
 ## Configuration
 
 ### Vault Variables

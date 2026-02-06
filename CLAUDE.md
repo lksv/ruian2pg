@@ -358,6 +358,18 @@ uv run python scripts/import_notice_boards.py --stats
 - ~6,500 boards from eDesky (all with edesky_id, edesky_url, NUTS3/NUTS4)
 - ~6,300 enriched with Cesko.Digital data (municipality_code, data_box_id)
 
+### Automated OFN Sync
+
+OFN document metadata is downloaded automatically every 4 hours via systemd timer (`ruian-ofn-sync.timer`). This covers ~197 boards with OFN feeds.
+
+```bash
+# Check timer status
+ssh lukas@46.224.67.103 systemctl status ruian-ofn-sync.timer
+
+# View logs
+ssh lukas@46.224.67.103 journalctl -u ruian-ofn-sync.service --since "1 day ago"
+```
+
 ### Local Development Services
 
 ```bash

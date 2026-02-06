@@ -67,3 +67,24 @@
   loop:
     - "{{ data_dir }}"
     - "{{ data_dir }}/attachments"
+
+- name: Deploy OFN sync systemd service
+  ansible.builtin.template:
+    src: ruian-ofn-sync.service.j2
+    dest: /etc/systemd/system/ruian-ofn-sync.service
+    mode: "0644"
+  notify: Reload systemd daemon
+
+- name: Deploy OFN sync systemd timer
+  ansible.builtin.template:
+    src: ruian-ofn-sync.timer.j2
+    dest: /etc/systemd/system/ruian-ofn-sync.timer
+    mode: "0644"
+  notify: Reload systemd daemon
+
+- name: Enable and start OFN sync timer
+  ansible.builtin.systemd:
+    name: ruian-ofn-sync.timer
+    enabled: true
+    state: started
+    daemon_reload: true

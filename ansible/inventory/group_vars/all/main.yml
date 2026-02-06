@@ -5,6 +5,7 @@ app_user: lukas
 app_home: "/home/{{ app_user }}"
 app_dir: "{{ app_home }}/ruian2pg"
 data_dir: "{{ app_dir }}/data"
+uv_bin: /usr/local/bin/uv
 
 # Git repository
 git_repo: "https://github.com/lksv/ruian2pg.git"

@@ -1,0 +1,14 @@
+[Unit]
+Description=Download OFN notice board document metadata
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={{ app_user }}
+WorkingDirectory={{ app_dir }}
+EnvironmentFile={{ app_dir }}/.env
+ExecStart={{ uv_bin }} run python scripts/download_ofn_documents.py --all-ofn
+TimeoutStartSec=1800
+StandardOutput=journal
+StandardError=journal
