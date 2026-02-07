@@ -119,10 +119,10 @@ def show_stats_by_mime(service: TextExtractionService) -> None:
     print("-" * 100)
 
     for row in stats:
-        mime = row["mime_type"] or "(none)"
+        mime = str(row["mime_type"] or "(none)")
         print(
-            f"{mime[:50]:<50} {row['total']:<10} {row['pending']:<10} "
-            f"{row['completed']:<10} {row['failed']:<10}"
+            f"{mime[:50]:<50} {row['total']!s:<10} {row['pending']!s:<10} "
+            f"{row['completed']!s:<10} {row['failed']!s:<10}"
         )
 
 

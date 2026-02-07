@@ -154,9 +154,9 @@ class DoclingExtractor(TextExtractor):
             ) from err
 
         # Configure OCR options based on backend
-        ocr_options: (
-            EasyOcrOptions | TesseractOcrOptions | RapidOcrOptions | OcrMacOptions | None
-        ) = None
+        from docling.datamodel.pipeline_options import OcrOptions
+
+        ocr_options: OcrOptions | None = None
 
         if self.config.use_ocr:
             if self.config.ocr_backend == "easyocr":
@@ -180,10 +180,10 @@ class DoclingExtractor(TextExtractor):
                 )
 
         # Configure PDF pipeline
-        pdf_options = PdfPipelineOptions(
-            do_ocr=self.config.use_ocr,
-            ocr_options=ocr_options,
-        )
+        pipeline_kwargs: dict[str, object] = {"do_ocr": self.config.use_ocr}
+        if ocr_options is not None:
+            pipeline_kwargs["ocr_options"] = ocr_options
+        pdf_options = PdfPipelineOptions(**pipeline_kwargs)  # type: ignore[arg-type]
 
         # Create converter with format options
         self._converter = DocumentConverter(

@@ -97,16 +97,37 @@ def json_to_notice_board(data: dict[str, Any]) -> NoticeBoard:
 def upsert_notice_boards(conn: "psycopg2.extensions.connection", boards: list[NoticeBoard]) -> int:
     """Upsert notice boards to database.
 
-    Uses municipality_code OR ico as unique key for conflict resolution.
+    Uses municipality_code as unique key for conflict resolution.
 
     Returns number of rows affected.
     """
     if not boards:
         return 0
 
+    # Deduplicate by municipality_code — keep last occurrence per code.
+    # City districts share municipality_code with parent city; the parent
+    # entry typically appears last in the JSON and is the one we want.
+    seen: dict[int, int] = {}
+    unique_boards: list[NoticeBoard] = []
+    for board in boards:
+        code = board.municipality_code
+        if code is not None and code in seen:
+            # Replace earlier entry with this one
+            unique_boards[seen[code]] = board
+        else:
+            if code is not None:
+                seen[code] = len(unique_boards)
+            unique_boards.append(board)
+
+    if len(unique_boards) < len(boards):
+        logger.info(
+            f"Deduplicated {len(boards)} boards to {len(unique_boards)} "
+            f"by municipality_code ({len(boards) - len(unique_boards)} duplicates removed)"
+        )
+
     # Prepare data for bulk insert
     rows = []
-    for board in boards:
+    for board in unique_boards:
         rows.append(
             (
                 board.municipality_code,
@@ -134,9 +155,14 @@ def upsert_notice_boards(conn: "psycopg2.extensions.connection", boards: list[No
             )
         )
 
-    # Use ON CONFLICT to upsert
-    # First, try to match by municipality_code if available, otherwise by ico
+    # Use ON CONFLICT to upsert by municipality_code (unique per board)
     with conn.cursor() as cur:
+        # Ensure partial unique index exists for ON CONFLICT
+        cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_notice_boards_municipality_code_unique
+            ON notice_boards(municipality_code) WHERE municipality_code IS NOT NULL
+        """)
+
         # Insert with ON CONFLICT DO UPDATE
         insert_sql = """
             INSERT INTO notice_boards (
@@ -150,11 +176,11 @@ def upsert_notice_boards(conn: "psycopg2.extensions.connection", boards: list[No
                 nutslau, coat_of_arms_url,
                 updated_at
             ) VALUES %s
-            ON CONFLICT (ico) WHERE ico IS NOT NULL
+            ON CONFLICT (municipality_code) WHERE municipality_code IS NOT NULL
             DO UPDATE SET
-                municipality_code = EXCLUDED.municipality_code,
                 name = EXCLUDED.name,
                 abbreviation = EXCLUDED.abbreviation,
+                ico = EXCLUDED.ico,
                 source_url = EXCLUDED.source_url,
                 edesky_url = EXCLUDED.edesky_url,
                 ofn_json_url = EXCLUDED.ofn_json_url,
@@ -213,8 +239,8 @@ def import_from_json(input_path: Path) -> None:
     for entry in data:
         try:
             board = json_to_notice_board(entry)
-            # Skip entries without any unique identifier
-            if not board.ico and not board.municipality_code:
+            # Skip entries without municipality_code (required for upsert)
+            if not board.municipality_code:
                 skipped += 1
                 continue
             boards.append(board)
