@@ -683,6 +683,11 @@ config = ExtractionConfig(
 )
 service = TextExtractionService(conn, downloader, config)
 
+# With compressed SQLite storage (saves ~10-20x space vs PG column)
+from notice_boards.services import SqliteTextStorage
+sqlite_storage = SqliteTextStorage(Path("data/texts"))
+service = TextExtractionService(conn, downloader, config, sqlite_storage=sqlite_storage)
+
 # Extract text (auto-downloads if needed)
 result = service.extract_text(attachment_id=123, persist_attachment=False)
 if result.success:
@@ -695,6 +700,9 @@ stats = service.extract_batch(
 )
 print(f"Extracted: {stats.extracted}, Failed: {stats.failed}")
 
+# Load text back (from SQLite or PG column)
+text = service.load_text(attachment_id=123)
+
 # Status management
 service.reset_to_pending(failed_only=True)
 ```
@@ -702,9 +710,10 @@ service.reset_to_pending(failed_only=True)
 **Key methods:**
 - `extract_text()` - Extract text from single attachment
 - `extract_batch()` - Process multiple pending attachments
+- `load_text()` - Load extracted text (from SQLite or PG)
 - `mark_parsing/completed/failed/skipped()` - Status transitions
 - `reset_to_pending()` - Reset failed/skipped for retry
-- `get_stats()` - Get extraction statistics
+- `get_stats()` - Get extraction statistics (includes compression ratio when SQLite used)
 - `get_stats_by_mime_type()` - Stats grouped by MIME type
 
 **Workflow integration:**
@@ -714,6 +723,43 @@ The `TextExtractionService` uses `AttachmentDownloader.get_attachment_content()`
 2. If not stored but has `orig_url` → downloads content
 3. If `persist=True` → saves to storage, updates DB
 4. If `persist=False` → returns content without saving (streaming mode)
+
+#### SqliteTextStorage (`services/sqlite_text_storage.py`)
+
+Compressed text storage using SQLite + zstd dictionary compression. Stores extracted text
+in SQLite files organized by NUTS3 region and year.
+
+```python
+from notice_boards.services import SqliteTextStorage
+from notice_boards.services.text_extractor import PendingExtraction
+from pathlib import Path
+
+# Storage at data/texts/{nuts3_id}/{year}.sqlite
+storage = SqliteTextStorage(Path("data/texts"))
+
+# Save text (compresses with zstd, auto-trains dictionary after 200 texts)
+compressed_size = storage.save(pending, "Extracted text...")
+
+# Load text (decompresses automatically)
+text = storage.load(pending)
+
+# Load by ID (when PendingExtraction not available)
+text = storage.load_by_id(attachment_id=123, nuts3_id=116, year=2024)
+
+# Stats across all files
+stats = storage.get_stats()
+# {'total_texts': 5000, 'compression_ratio': 12.5, ...}
+
+# Re-compress old texts after dictionary training
+count = storage.recompress_with_dictionary("116/2024.sqlite")
+```
+
+**Key features:**
+- zstd compression with automatic dictionary training (after 200 texts per file)
+- ~14 regions x ~5 years = ~70 SQLite files
+- WAL mode for concurrent access
+- Connection pooling (one per SQLite file)
+- Boards without NUTS3 go to `_unknown/` directory
 
 #### DocumentRepository (`repository.py`)
 
@@ -843,6 +889,7 @@ ruian2pg/
 │       ├── services/
 │       │   ├── __init__.py     # Service exports
 │       │   ├── attachment_downloader.py  # AttachmentDownloader
+│       │   ├── sqlite_text_storage.py    # SqliteTextStorage (zstd compressed)
 │       │   └── text_extractor.py         # TextExtractionService
 │       ├── parsers/
 │       │   ├── base.py         # TextExtractor ABC
@@ -872,6 +919,8 @@ ruian2pg/
 │   ├── migrate_notice_boards_v6.sql # Migration: remove ICO unique
 │   ├── migrate_notice_boards_v7.sql # Migration: download_status
 │   ├── migrate_notice_boards_v8.sql # Migration: parse_status states
+│   ├── migrate_notice_boards_v9.sql # Migration: text_length column
+│   ├── migrate_texts_to_sqlite.py   # CLI: move texts from PG to SQLite
 │   └── setup_indexes.sql       # Spatial indexes
 │
 ├── web/

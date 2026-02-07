@@ -7,6 +7,7 @@ from notice_boards.services.attachment_downloader import (
     DownloadStats,
     PendingAttachment,
 )
+from notice_boards.services.sqlite_text_storage import SqliteTextStorage
 from notice_boards.services.text_extractor import (
     ExtractionConfig,
     ExtractionResult,
@@ -25,5 +26,6 @@ __all__ = [
     "ExtractionStats",
     "PendingAttachment",
     "PendingExtraction",
+    "SqliteTextStorage",
     "TextExtractionService",
 ]

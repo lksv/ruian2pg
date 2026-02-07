@@ -53,6 +53,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from notice_boards.config import get_db_connection
 from notice_boards.services.attachment_downloader import AttachmentDownloader
+from notice_boards.services.sqlite_text_storage import SqliteTextStorage
 from notice_boards.services.text_extractor import (
     ExtractionConfig,
     ExtractionResult,
@@ -81,7 +82,10 @@ def show_stats(service: TextExtractionService) -> None:
     print(f"  Completed:           {stats['completed']:,}")
     print(f"  Failed:              {stats['failed']:,}")
     print(f"  Skipped:             {stats['skipped']:,}")
-    print(f"  Total chars:         {stats['total_chars']:,}")
+    print(f"  Total chars:         {int(stats['total_chars']):,}")
+    if "compression_ratio" in stats:
+        print(f"  Compression ratio:   {stats['compression_ratio']:.1f}x")
+        print(f"  Compressed size:     {int(stats['compressed_bytes']):,} bytes")
 
 
 def show_stats_by_board(service: TextExtractionService, limit: int = 20) -> None:
@@ -283,6 +287,14 @@ def main() -> int:
         default=Path("data/attachments"),
         help="Path for attachment storage (default: data/attachments)",
     )
+    parser.add_argument(
+        "--text-storage-path",
+        type=Path,
+        default=None,
+        help="Path for SQLite text storage (e.g., data/texts). "
+        "When set, extracted text is compressed and stored in SQLite files "
+        "instead of PostgreSQL.",
+    )
 
     # OCR options
     parser.add_argument("--no-ocr", action="store_true", help="Disable OCR (faster)")
@@ -351,8 +363,13 @@ def main() -> int:
         verbose=args.verbose,
     )
 
+    # Create SQLite text storage if path specified
+    sqlite_storage: SqliteTextStorage | None = None
+    if args.text_storage_path:
+        sqlite_storage = SqliteTextStorage(args.text_storage_path)
+
     # Create service
-    service = TextExtractionService(conn, downloader, config)
+    service = TextExtractionService(conn, downloader, config, sqlite_storage=sqlite_storage)
 
     try:
         # Handle different modes
@@ -391,6 +408,8 @@ def main() -> int:
         return 1
 
     finally:
+        if sqlite_storage is not None:
+            sqlite_storage.close()
         conn.close()
 
 

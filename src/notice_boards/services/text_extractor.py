@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from psycopg2.extensions import connection as Connection
 
     from notice_boards.services.attachment_downloader import AttachmentDownloader
+    from notice_boards.services.sqlite_text_storage import SqliteTextStorage
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,8 @@ class PendingExtraction:
     orig_url: str | None
     download_status: str
     board_name: str | None = None
+    nuts3_id: int | None = None
+    published_at: date | None = None
 
 
 @dataclass
@@ -188,6 +191,7 @@ class TextExtractionService:
         config: ExtractionConfig | None = None,
         text_storage: StorageBackend | None = None,
         extractor: TextExtractor | None = None,
+        sqlite_storage: "SqliteTextStorage | None" = None,
     ) -> None:
         """Initialize text extraction service.
 
@@ -197,11 +201,14 @@ class TextExtractionService:
             config: Extraction configuration.
             text_storage: Optional storage backend for extracted text files.
             extractor: Optional custom text extractor (default: create_default_extractor)
+            sqlite_storage: Optional SQLite text storage for compressed text.
+                           When set, extracted text is stored in SQLite instead of PG.
         """
         self.conn = conn
         self.downloader = downloader
         self.config = config or ExtractionConfig()
         self.text_storage = text_storage
+        self.sqlite_storage = sqlite_storage
 
         # Create default extractor if not provided
         if extractor is not None:
@@ -315,7 +322,8 @@ class TextExtractionService:
             query = """
                 SELECT a.id, a.document_id, d.notice_board_id,
                        a.filename, a.mime_type, a.file_size_bytes,
-                       a.storage_path, a.orig_url, a.download_status, nb.name
+                       a.storage_path, a.orig_url, a.download_status, nb.name,
+                       nb.nuts3_id, d.published_at
                 FROM attachments a
                 JOIN documents d ON d.id = a.document_id
                 LEFT JOIN notice_boards nb ON nb.id = d.notice_board_id
@@ -363,6 +371,8 @@ class TextExtractionService:
                     orig_url=row[7],
                     download_status=row[8] or DownloadStatus.PENDING,
                     board_name=row[9],
+                    nuts3_id=row[10],
+                    published_at=row[11],
                 )
 
     def get_pending_extractions(
@@ -531,7 +541,7 @@ class TextExtractionService:
 
         if text is None:
             # Extractor returned None - no text found
-            self.mark_completed(attachment_id, "")
+            self.mark_completed(attachment_id, "", pending=pending)
             return ExtractionResult(
                 attachment_id=attachment_id,
                 success=True,
@@ -539,7 +549,7 @@ class TextExtractionService:
             )
 
         # Mark completed with extracted text
-        self.mark_completed(attachment_id, text)
+        self.mark_completed(attachment_id, text, pending=pending)
 
         if self.config.verbose:
             logger.info(
@@ -560,7 +570,8 @@ class TextExtractionService:
                 """
                 SELECT a.id, a.document_id, d.notice_board_id,
                        a.filename, a.mime_type, a.file_size_bytes,
-                       a.storage_path, a.orig_url, a.download_status, nb.name
+                       a.storage_path, a.orig_url, a.download_status, nb.name,
+                       nb.nuts3_id, d.published_at
                 FROM attachments a
                 JOIN documents d ON d.id = a.document_id
                 LEFT JOIN notice_boards nb ON nb.id = d.notice_board_id
@@ -583,6 +594,8 @@ class TextExtractionService:
                 orig_url=row[7],
                 download_status=row[8] or DownloadStatus.PENDING,
                 board_name=row[9],
+                nuts3_id=row[10],
+                published_at=row[11],
             )
 
     # -------------------------------------------------------------------------
@@ -675,25 +688,62 @@ class TextExtractionService:
             )
         self.conn.commit()
 
-    def mark_completed(self, attachment_id: int, extracted_text: str) -> None:
+    def mark_completed(
+        self,
+        attachment_id: int,
+        extracted_text: str,
+        pending: PendingExtraction | None = None,
+    ) -> None:
         """Mark attachment as completed with extracted text.
+
+        When sqlite_storage is configured and pending is provided, text is stored
+        in compressed SQLite and only metadata (text_length) is kept in PG.
 
         Args:
             attachment_id: Attachment ID.
             extracted_text: Extracted text content.
+            pending: Optional PendingExtraction for SQLite storage partitioning.
         """
-        with self.conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE attachments
-                SET parse_status = %s,
-                    parsed_at = %s,
-                    extracted_text = %s,
-                    parse_error = NULL
-                WHERE id = %s
-                """,
-                (ParseStatus.COMPLETED, datetime.now(), extracted_text, attachment_id),
-            )
+        if self.sqlite_storage is not None and pending is not None:
+            self.sqlite_storage.save(pending, extracted_text)
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE attachments
+                    SET parse_status = %s,
+                        parsed_at = %s,
+                        extracted_text = NULL,
+                        text_length = %s,
+                        parse_error = NULL
+                    WHERE id = %s
+                    """,
+                    (
+                        ParseStatus.COMPLETED,
+                        datetime.now(),
+                        len(extracted_text),
+                        attachment_id,
+                    ),
+                )
+        else:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE attachments
+                    SET parse_status = %s,
+                        parsed_at = %s,
+                        extracted_text = %s,
+                        text_length = %s,
+                        parse_error = NULL
+                    WHERE id = %s
+                    """,
+                    (
+                        ParseStatus.COMPLETED,
+                        datetime.now(),
+                        extracted_text,
+                        len(extracted_text),
+                        attachment_id,
+                    ),
+                )
         self.conn.commit()
 
     def mark_failed(
@@ -776,13 +826,16 @@ class TextExtractionService:
     # Statistics
     # -------------------------------------------------------------------------
 
-    def get_stats(self) -> dict[str, int]:
+    def get_stats(self) -> dict[str, int | float]:
         """Get extraction statistics.
 
         Returns:
-            Dict with counts for total, pending, parsing, completed, failed, skipped.
+            Dict with counts for total, pending, parsing, completed, failed, skipped,
+            total_chars, and optionally compression_ratio from SQLite storage.
         """
         with self.conn.cursor() as cur:
+            # Use text_length column (from SQLite storage or populated on save),
+            # falling back to LENGTH(extracted_text) for backwards compatibility
             cur.execute(
                 """
                 SELECT
@@ -792,7 +845,9 @@ class TextExtractionService:
                     COUNT(CASE WHEN parse_status = 'completed' THEN 1 END) AS completed,
                     COUNT(CASE WHEN parse_status = 'failed' THEN 1 END) AS failed,
                     COUNT(CASE WHEN parse_status = 'skipped' THEN 1 END) AS skipped,
-                    COALESCE(SUM(LENGTH(extracted_text)), 0) AS total_chars
+                    COALESCE(
+                        SUM(COALESCE(text_length, LENGTH(extracted_text))), 0
+                    ) AS total_chars
                 FROM attachments
                 """
             )
@@ -807,7 +862,7 @@ class TextExtractionService:
                     "skipped": 0,
                     "total_chars": 0,
                 }
-            return {
+            stats: dict[str, int | float] = {
                 "total": row[0],
                 "pending": row[1],
                 "parsing": row[2],
@@ -816,6 +871,14 @@ class TextExtractionService:
                 "skipped": row[5],
                 "total_chars": row[6],
             }
+
+        # Add compression stats from SQLite storage if available
+        if self.sqlite_storage is not None:
+            sqlite_stats = self.sqlite_storage.get_stats()
+            stats["compression_ratio"] = sqlite_stats["compression_ratio"]
+            stats["compressed_bytes"] = sqlite_stats["total_compressed_bytes"]
+
+        return stats
 
     def get_stats_by_board(self) -> list[dict[str, int | str | None]]:
         """Get extraction statistics grouped by notice board.
@@ -887,3 +950,50 @@ class TextExtractionService:
                 }
                 for row in cur.fetchall()
             ]
+
+    # -------------------------------------------------------------------------
+    # Text retrieval
+    # -------------------------------------------------------------------------
+
+    def load_text(self, attachment_id: int) -> str | None:
+        """Load extracted text for an attachment.
+
+        Checks SQLite storage first (if configured), then falls back to
+        the extracted_text column in PostgreSQL.
+
+        Args:
+            attachment_id: Database ID of the attachment.
+
+        Returns:
+            Extracted text, or None if not found.
+        """
+        if self.sqlite_storage is not None:
+            # Get partition info from database
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT nb.nuts3_id, d.published_at
+                    FROM attachments a
+                    JOIN documents d ON d.id = a.document_id
+                    LEFT JOIN notice_boards nb ON nb.id = d.notice_board_id
+                    WHERE a.id = %s
+                    """,
+                    (attachment_id,),
+                )
+                row = cur.fetchone()
+                if row is not None:
+                    nuts3_id = row[0]
+                    published_at = row[1]
+                    year = published_at.year if published_at else None
+                    text = self.sqlite_storage.load_by_id(attachment_id, nuts3_id, year)
+                    if text is not None:
+                        return text
+
+        # Fallback: read from database column
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT extracted_text FROM attachments WHERE id = %s",
+                (attachment_id,),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None

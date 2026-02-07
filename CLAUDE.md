@@ -67,6 +67,7 @@ psql -U ruian -d ruian -f scripts/migrate_notice_boards_v5.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v6.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v7.sql
 psql -U ruian -d ruian -f scripts/migrate_notice_boards_v8.sql
+psql -U ruian -d ruian -f scripts/migrate_notice_boards_v9.sql
 
 # Generate test data for map rendering
 uv run python scripts/generate_test_references.py --cadastral-name "Veveří"
@@ -268,6 +269,14 @@ uv run python scripts/extract_text.py --reset-failed
 
 # Reset failed and skipped
 uv run python scripts/extract_text.py --reset-all
+
+# Store extracted text in compressed SQLite (instead of PostgreSQL)
+uv run python scripts/extract_text.py --all --text-storage-path data/texts
+
+# Migrate existing texts from PostgreSQL to SQLite
+uv run python scripts/migrate_texts_to_sqlite.py --dry-run
+uv run python scripts/migrate_texts_to_sqlite.py --limit 1000
+uv run python scripts/migrate_texts_to_sqlite.py
 ```
 
 **Library usage:**
@@ -290,6 +299,11 @@ config = ExtractionConfig(
 )
 
 service = TextExtractionService(conn, downloader, config)
+
+# With compressed SQLite storage (instead of PG extracted_text column)
+from notice_boards.services import SqliteTextStorage
+sqlite_storage = SqliteTextStorage(Path("data/texts"))
+service = TextExtractionService(conn, downloader, config, sqlite_storage=sqlite_storage)
 
 # Get statistics
 stats = service.get_stats()
@@ -403,6 +417,7 @@ cd web && python3 -m http.server 8080
 - `ogr2ogr` (GDAL) - required for VFR import (`brew install gdal`)
 - `psycopg2-binary` - PostgreSQL connection
 - `httpx` - HTTP downloads
+- `zstandard` - zstd compression for SQLite text storage
 
 ## Database
 
@@ -436,6 +451,7 @@ WHERE p.geom && ST_Transform(ST_TileEnvelope(z, x, y), 5514)
 - `OfnClient` (`src/notice_boards/scrapers/ofn.py`) - HTTP client for OFN JSON-LD feeds
 - `OfnScraper` (`src/notice_boards/scrapers/ofn.py`) - scraper for OFN notice board documents
 - `DocumentRepository` (`src/notice_boards/repository.py`) - database operations for documents/attachments
+- `SqliteTextStorage` (`src/notice_boards/services/sqlite_text_storage.py`) - compressed text storage in SQLite files with zstd dictionary compression
 
 ## Database Tables
 

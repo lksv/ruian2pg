@@ -1,11 +1,13 @@
 """Tests for text extraction service."""
 
 from datetime import date
+from pathlib import Path
 
 import pytest
 
 from notice_boards.models import DownloadStatus, ParseStatus
 from notice_boards.parsers.base import CompositeTextExtractor, TextExtractionError, TextExtractor
+from notice_boards.services.sqlite_text_storage import SqliteTextStorage
 from notice_boards.services.text_extractor import (
     SUPPORTED_MIME_TYPES,
     ExtractionConfig,
@@ -156,6 +158,42 @@ class TestPendingExtraction:
         assert pending.notice_board_id == 100
         assert pending.filename == "test.pdf"
         assert pending.mime_type == "application/pdf"
+
+    def test_creation_with_nuts3_and_published_at(self) -> None:
+        """Test creating PendingExtraction with nuts3_id and published_at."""
+        pending = PendingExtraction(
+            id=1,
+            document_id=10,
+            notice_board_id=100,
+            filename="test.pdf",
+            mime_type="application/pdf",
+            file_size_bytes=1024,
+            storage_path=None,
+            orig_url=None,
+            download_status=DownloadStatus.DOWNLOADED,
+            nuts3_id=116,
+            published_at=date(2024, 6, 15),
+        )
+
+        assert pending.nuts3_id == 116
+        assert pending.published_at == date(2024, 6, 15)
+
+    def test_defaults_nuts3_published_at(self) -> None:
+        """Test that nuts3_id and published_at default to None."""
+        pending = PendingExtraction(
+            id=1,
+            document_id=10,
+            notice_board_id=100,
+            filename="test.pdf",
+            mime_type=None,
+            file_size_bytes=None,
+            storage_path=None,
+            orig_url=None,
+            download_status="pending",
+        )
+
+        assert pending.nuts3_id is None
+        assert pending.published_at is None
 
 
 class TestExtractionResult:
@@ -338,6 +376,8 @@ class TestTextExtractionService:
                 None,
                 "pending",
                 "Test Board",
+                116,
+                date(2024, 1, 1),
             )
         ]
 
@@ -373,6 +413,8 @@ class TestTextExtractionService:
                 None,
                 "downloaded",
                 "Test Board",
+                116,
+                date(2024, 1, 1),
             )
         ]
         mock_extractor.return_value = "Extracted text content"
@@ -410,6 +452,8 @@ class TestTextExtractionService:
                 "http://example.com/test.pdf",
                 "pending",
                 "Test Board",
+                116,
+                date(2024, 1, 1),
             )
         ]
         mock_downloader.content = None
@@ -446,6 +490,8 @@ class TestTextExtractionService:
                 None,
                 "downloaded",
                 "Test Board",
+                116,
+                date(2024, 1, 1),
             )
         ]
 
@@ -469,7 +515,7 @@ class TestTextExtractionService:
         mock_downloader: MockAttachmentDownloader,
     ) -> None:
         """Test extraction handles extractor errors."""
-        # Setup mock to return valid attachment
+        # Setup mock to return valid attachment (12 columns: +nuts3_id, +published_at)
         mock_conn._cursor.results = [
             (
                 1,
@@ -482,6 +528,8 @@ class TestTextExtractionService:
                 None,
                 "downloaded",
                 "Test Board",
+                116,
+                date(2024, 1, 1),
             )
         ]
 
@@ -535,7 +583,75 @@ class TestTextExtractionService:
         assert mock_conn.committed is True
         assert mock_conn.last_query is not None
         assert "extracted_text" in mock_conn.last_query
+        assert "text_length" in mock_conn.last_query
         assert ParseStatus.COMPLETED in mock_conn.last_params  # type: ignore
+
+    def test_mark_completed_with_sqlite_storage(
+        self,
+        mock_conn: MockConnection,
+        mock_downloader: MockAttachmentDownloader,
+        tmp_path: Path,
+    ) -> None:
+        """Test mark_completed stores text in SQLite when storage configured."""
+        sqlite_storage = SqliteTextStorage(tmp_path)
+
+        service = TextExtractionService(
+            conn=mock_conn,  # type: ignore
+            downloader=mock_downloader,  # type: ignore
+            sqlite_storage=sqlite_storage,
+        )
+
+        pending = PendingExtraction(
+            id=1,
+            document_id=10,
+            notice_board_id=100,
+            filename="test.pdf",
+            mime_type="application/pdf",
+            file_size_bytes=1024,
+            storage_path=None,
+            orig_url=None,
+            download_status="downloaded",
+            nuts3_id=116,
+            published_at=date(2024, 6, 15),
+        )
+
+        service.mark_completed(
+            attachment_id=1, extracted_text="Test text from SQLite", pending=pending
+        )
+
+        # Verify text was saved to SQLite
+        loaded = sqlite_storage.load(pending)
+        assert loaded == "Test text from SQLite"
+
+        # Verify DB was updated with NULL extracted_text and text_length
+        assert mock_conn.committed is True
+        assert mock_conn.last_query is not None
+        assert "extracted_text = NULL" in mock_conn.last_query
+        assert "text_length" in mock_conn.last_query
+        sqlite_storage.close()
+
+    def test_mark_completed_without_pending_falls_back_to_db(
+        self,
+        mock_conn: MockConnection,
+        mock_downloader: MockAttachmentDownloader,
+        tmp_path: Path,
+    ) -> None:
+        """Test mark_completed stores in DB when pending is None even with sqlite_storage."""
+        sqlite_storage = SqliteTextStorage(tmp_path)
+
+        service = TextExtractionService(
+            conn=mock_conn,  # type: ignore
+            downloader=mock_downloader,  # type: ignore
+            sqlite_storage=sqlite_storage,
+        )
+
+        # Call without pending — should store in DB
+        service.mark_completed(attachment_id=1, extracted_text="DB text")
+
+        assert mock_conn.committed is True
+        assert mock_conn.last_query is not None
+        assert "extracted_text = %s" in mock_conn.last_query
+        sqlite_storage.close()
 
     def test_mark_failed(
         self, mock_conn: MockConnection, mock_downloader: MockAttachmentDownloader
@@ -662,3 +778,74 @@ class TestCreateDefaultExtractor:
         # Should not raise
         extractor = create_default_extractor(output_format="text")
         assert extractor is not None
+
+
+class TestLoadText:
+    """Tests for load_text method."""
+
+    def test_load_text_from_db(
+        self,
+    ) -> None:
+        """Test load_text reads from DB column when no sqlite_storage."""
+        conn = MockConnection()
+        downloader = MockAttachmentDownloader()
+        service = TextExtractionService(
+            conn=conn,  # type: ignore
+            downloader=downloader,  # type: ignore
+        )
+
+        conn._cursor.results = [("Text from DB",)]
+        text = service.load_text(attachment_id=1)
+
+        assert text == "Text from DB"
+        assert conn.last_query is not None
+        assert "extracted_text" in conn.last_query
+
+    def test_load_text_from_sqlite(self, tmp_path: Path) -> None:
+        """Test load_text reads from SQLite when configured."""
+        conn = MockConnection()
+        downloader = MockAttachmentDownloader()
+        sqlite_storage = SqliteTextStorage(tmp_path)
+
+        # Save a text to SQLite
+        pending = PendingExtraction(
+            id=42,
+            document_id=10,
+            notice_board_id=100,
+            filename="test.pdf",
+            mime_type="application/pdf",
+            file_size_bytes=1024,
+            storage_path=None,
+            orig_url=None,
+            download_status="downloaded",
+            nuts3_id=116,
+            published_at=date(2024, 6, 15),
+        )
+        sqlite_storage.save(pending, "Text from SQLite")
+
+        service = TextExtractionService(
+            conn=conn,  # type: ignore
+            downloader=downloader,  # type: ignore
+            sqlite_storage=sqlite_storage,
+        )
+
+        # Mock the DB query that gets partition info
+        conn._cursor.results = [(116, date(2024, 6, 15))]
+        text = service.load_text(attachment_id=42)
+
+        assert text == "Text from SQLite"
+        sqlite_storage.close()
+
+    def test_load_text_not_found(self) -> None:
+        """Test load_text returns None when text not found."""
+        conn = MockConnection()
+        downloader = MockAttachmentDownloader()
+        service = TextExtractionService(
+            conn=conn,  # type: ignore
+            downloader=downloader,  # type: ignore
+        )
+
+        conn._cursor.results = []
+        text = service.load_text(attachment_id=999)
+
+        assert text is None
