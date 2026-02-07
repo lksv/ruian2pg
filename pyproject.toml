@@ -30,10 +30,46 @@ docling-ocr = [
     "docling>=2.70.0",
     "easyocr>=1.7.0",
 ]
+cpu = [
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+]
+cu124 = [
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+]
 
 [project.scripts]
 ruian-download = "scripts.download_ruian:main"
 ruian-import = "scripts.import_ruian:main"
+
+[tool.uv]
+# On Linux without GPU, use CPU-only PyTorch (~300MB instead of ~6GB with CUDA).
+# macOS PyPI wheels are already CPU-only, so no override needed there.
+# To install with CUDA on Linux, use: uv sync --extra cu124
+conflicts = [
+    [{ extra = "cpu" }, { extra = "cu124" }],
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu124", extra = "cu124", marker = "sys_platform == 'linux'" },
+]
+torchvision = [
+    { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu124", extra = "cu124", marker = "sys_platform == 'linux'" },
+]
 
 [build-system]
 requires = ["hatchling"]
