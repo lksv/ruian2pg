@@ -67,15 +67,28 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _format_bytes(n: int | float) -> str:
+    """Format byte count as human-readable string (KB/MB/GB)."""
+    n = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(n) < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} PB"
+
+
 def parse_date(date_str: str) -> date:
     """Parse date string in YYYY-MM-DD format."""
     return datetime.strptime(date_str, "%Y-%m-%d").date()
 
 
-def show_stats(service: TextExtractionService) -> None:
+def show_stats(service: TextExtractionService, board_id: int | None = None) -> None:
     """Display extraction statistics."""
-    stats = service.get_stats()
-    print("\nText Extraction Statistics:")
+    stats = service.get_stats(board_id=board_id)
+    header = "\nText Extraction Statistics:"
+    if board_id is not None:
+        header += f" (board_id={board_id})"
+    print(header)
     print(f"  Total attachments:   {stats['total']:,}")
     print(f"  Pending:             {stats['pending']:,}")
     print(f"  Parsing:             {stats['parsing']:,}")
@@ -84,8 +97,13 @@ def show_stats(service: TextExtractionService) -> None:
     print(f"  Skipped:             {stats['skipped']:,}")
     print(f"  Total chars:         {int(stats['total_chars']):,}")
     if "compression_ratio" in stats:
-        print(f"  Compression ratio:   {stats['compression_ratio']:.1f}x")
-        print(f"  Compressed size:     {int(stats['compressed_bytes']):,} bytes")
+        print("\n  SQLite Storage:")
+        print(f"    Stored texts:      {stats['stored_texts']:,}")
+        print(f"    Original size:     {_format_bytes(stats['original_bytes'])}")
+        print(f"    Compressed size:   {_format_bytes(stats['compressed_bytes'])}")
+        print(f"    Compression ratio: {stats['compression_ratio']:.1f}x")
+        print(f"    SQLite files:      {stats['num_files']:,}")
+        print(f"    Dictionaries:      {stats['num_dictionaries']:,}")
 
 
 def show_stats_by_board(service: TextExtractionService, limit: int = 20) -> None:
@@ -110,9 +128,9 @@ def show_stats_by_board(service: TextExtractionService, limit: int = 20) -> None
         print(f"... and {len(stats) - limit} more boards")
 
 
-def show_stats_by_mime(service: TextExtractionService) -> None:
+def show_stats_by_mime(service: TextExtractionService, board_id: int | None = None) -> None:
     """Display statistics by MIME type."""
-    stats = service.get_stats_by_mime_type()
+    stats = service.get_stats_by_mime_type(board_id=board_id)
     if not stats:
         print("\nNo attachments found.")
         return
@@ -241,7 +259,6 @@ def main() -> int:
     # Mode selection
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--all", action="store_true", help="Extract from all pending attachments")
-    mode.add_argument("--board-id", type=int, help="Extract from specific board ID")
     mode.add_argument("--attachment-id", type=int, help="Extract from single attachment")
     mode.add_argument("--stats", action="store_true", help="Show extraction statistics")
     mode.add_argument(
@@ -255,6 +272,11 @@ def main() -> int:
     )
 
     # Filtering options
+    parser.add_argument(
+        "--board-id",
+        type=int,
+        help="Board ID to filter by (works with --stats, --stats-by-mime, extraction)",
+    )
     parser.add_argument(
         "--only-downloaded",
         action="store_true",
@@ -290,8 +312,8 @@ def main() -> int:
     parser.add_argument(
         "--text-storage-path",
         type=Path,
-        default=None,
-        help="Path for SQLite text storage (e.g., data/texts). "
+        default=Path("data/texts"),
+        help="Path for SQLite text storage (default: data/texts). "
         "When set, extracted text is compressed and stored in SQLite files "
         "instead of PostgreSQL.",
     )
@@ -325,7 +347,6 @@ def main() -> int:
     if not any(
         [
             args.all,
-            args.board_id,
             args.attachment_id,
             args.stats,
             args.stats_by_board,
@@ -374,7 +395,7 @@ def main() -> int:
     try:
         # Handle different modes
         if args.stats:
-            show_stats(service)
+            show_stats(service, board_id=args.board_id)
             return 0
 
         if args.stats_by_board:
@@ -382,7 +403,7 @@ def main() -> int:
             return 0
 
         if args.stats_by_mime:
-            show_stats_by_mime(service)
+            show_stats_by_mime(service, board_id=args.board_id)
             return 0
 
         if args.dry_run:
@@ -400,7 +421,7 @@ def main() -> int:
             return 0
 
         # Run extraction
-        if args.all or args.board_id or args.attachment_id:
+        if args.all or args.attachment_id:
             return run_extraction(service, args)
 
         # Should not reach here

@@ -60,11 +60,14 @@ def setup_logging(verbose: bool) -> None:
     )
 
 
-def print_stats(downloader: AttachmentDownloader) -> None:
+def print_stats(downloader: AttachmentDownloader, board_id: int | None = None) -> None:
     """Print attachment statistics."""
-    stats = downloader.get_stats()
+    stats = downloader.get_stats(board_id=board_id)
 
-    print("\nAttachment Statistics:")
+    header = "\nAttachment Statistics:"
+    if board_id is not None:
+        header += f" (board_id={board_id})"
+    print(header)
     print(f"  Total attachments:    {stats['total']:,}")
     print(f"  Downloaded:           {stats['downloaded']:,}")
     print(f"  Pending:              {stats['pending']:,}")
@@ -141,7 +144,7 @@ Examples:
     )
 
     # Action arguments
-    action_group = parser.add_mutually_exclusive_group(required=True)
+    action_group = parser.add_mutually_exclusive_group()
     action_group.add_argument(
         "--stats",
         action="store_true",
@@ -151,12 +154,6 @@ Examples:
         "--all",
         action="store_true",
         help="Download all pending attachments",
-    )
-    action_group.add_argument(
-        "--board-id",
-        type=int,
-        metavar="ID",
-        help="Download attachments for specific notice board",
     )
     action_group.add_argument(
         "--document-id",
@@ -178,6 +175,14 @@ Examples:
         "--reset-failed",
         action="store_true",
         help="Reset failed attachments to pending for retry",
+    )
+
+    # Filtering options
+    parser.add_argument(
+        "--board-id",
+        type=int,
+        metavar="ID",
+        help="Board ID to filter by (works with --stats, --all, download)",
     )
 
     # Date filter options
@@ -242,6 +247,19 @@ Examples:
     args = parser.parse_args()
     setup_logging(args.verbose)
 
+    # Default to --stats if no action specified
+    if not any(
+        [
+            args.stats,
+            args.all,
+            args.document_id,
+            args.list_pending,
+            args.mark_removed,
+            args.reset_failed,
+        ]
+    ):
+        args.stats = True
+
     # Validate mark-removed requires date filter
     if args.mark_removed and not args.published_before:
         parser.error("--mark-removed requires --published-before")
@@ -272,7 +290,7 @@ Examples:
 
     try:
         if args.stats:
-            print_stats(downloader)
+            print_stats(downloader, board_id=args.board_id)
 
         elif args.list_pending:
             print_pending(downloader, limit=args.limit or 20)

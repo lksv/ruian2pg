@@ -826,8 +826,11 @@ class TextExtractionService:
     # Statistics
     # -------------------------------------------------------------------------
 
-    def get_stats(self) -> dict[str, int | float]:
+    def get_stats(self, board_id: int | None = None) -> dict[str, int | float]:
         """Get extraction statistics.
+
+        Args:
+            board_id: Filter by notice board ID (optional).
 
         Returns:
             Dict with counts for total, pending, parsing, completed, failed, skipped,
@@ -836,21 +839,25 @@ class TextExtractionService:
         with self.conn.cursor() as cur:
             # Use text_length column (from SQLite storage or populated on save),
             # falling back to LENGTH(extracted_text) for backwards compatibility
-            cur.execute(
-                """
+            query = """
                 SELECT
                     COUNT(*) AS total,
-                    COUNT(CASE WHEN parse_status = 'pending' THEN 1 END) AS pending,
-                    COUNT(CASE WHEN parse_status = 'parsing' THEN 1 END) AS parsing,
-                    COUNT(CASE WHEN parse_status = 'completed' THEN 1 END) AS completed,
-                    COUNT(CASE WHEN parse_status = 'failed' THEN 1 END) AS failed,
-                    COUNT(CASE WHEN parse_status = 'skipped' THEN 1 END) AS skipped,
+                    COUNT(CASE WHEN a.parse_status = 'pending' THEN 1 END) AS pending,
+                    COUNT(CASE WHEN a.parse_status = 'parsing' THEN 1 END) AS parsing,
+                    COUNT(CASE WHEN a.parse_status = 'completed' THEN 1 END) AS completed,
+                    COUNT(CASE WHEN a.parse_status = 'failed' THEN 1 END) AS failed,
+                    COUNT(CASE WHEN a.parse_status = 'skipped' THEN 1 END) AS skipped,
                     COALESCE(
-                        SUM(COALESCE(text_length, LENGTH(extracted_text))), 0
+                        SUM(COALESCE(a.text_length, LENGTH(a.extracted_text))), 0
                     ) AS total_chars
-                FROM attachments
-                """
-            )
+                FROM attachments a
+            """
+            params: list[int] = []
+            if board_id is not None:
+                query += " JOIN documents d ON d.id = a.document_id WHERE d.notice_board_id = %s"
+                params.append(board_id)
+
+            cur.execute(query, params)
             row = cur.fetchone()
             if row is None:
                 return {
@@ -877,6 +884,10 @@ class TextExtractionService:
             sqlite_stats = self.sqlite_storage.get_stats()
             stats["compression_ratio"] = sqlite_stats["compression_ratio"]
             stats["compressed_bytes"] = sqlite_stats["total_compressed_bytes"]
+            stats["stored_texts"] = sqlite_stats["total_texts"]
+            stats["original_bytes"] = sqlite_stats["total_original_bytes"]
+            stats["num_files"] = sqlite_stats["num_files"]
+            stats["num_dictionaries"] = sqlite_stats["num_dictionaries"]
 
         return stats
 
@@ -918,27 +929,35 @@ class TextExtractionService:
                 for row in cur.fetchall()
             ]
 
-    def get_stats_by_mime_type(self) -> list[dict[str, int | str | None]]:
+    def get_stats_by_mime_type(
+        self, board_id: int | None = None
+    ) -> list[dict[str, int | str | None]]:
         """Get extraction statistics grouped by MIME type.
+
+        Args:
+            board_id: Filter by notice board ID (optional).
 
         Returns:
             List of dicts with mime_type and status counts.
         """
         with self.conn.cursor() as cur:
-            cur.execute(
-                """
+            query = """
                 SELECT
-                    mime_type,
+                    a.mime_type,
                     COUNT(*) AS total,
-                    COUNT(CASE WHEN parse_status = 'pending' THEN 1 END) AS pending,
-                    COUNT(CASE WHEN parse_status = 'completed' THEN 1 END) AS completed,
-                    COUNT(CASE WHEN parse_status = 'failed' THEN 1 END) AS failed,
-                    COUNT(CASE WHEN parse_status = 'skipped' THEN 1 END) AS skipped
-                FROM attachments
-                GROUP BY mime_type
-                ORDER BY total DESC
-                """
-            )
+                    COUNT(CASE WHEN a.parse_status = 'pending' THEN 1 END) AS pending,
+                    COUNT(CASE WHEN a.parse_status = 'completed' THEN 1 END) AS completed,
+                    COUNT(CASE WHEN a.parse_status = 'failed' THEN 1 END) AS failed,
+                    COUNT(CASE WHEN a.parse_status = 'skipped' THEN 1 END) AS skipped
+                FROM attachments a
+            """
+            params: list[int] = []
+            if board_id is not None:
+                query += " JOIN documents d ON d.id = a.document_id WHERE d.notice_board_id = %s"
+                params.append(board_id)
+            query += " GROUP BY a.mime_type ORDER BY total DESC"
+
+            cur.execute(query, params)
             return [
                 {
                     "mime_type": row[0],

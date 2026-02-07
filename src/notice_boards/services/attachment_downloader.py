@@ -605,25 +605,32 @@ class AttachmentDownloader:
             on_progress=on_progress,
         )
 
-    def get_stats(self) -> dict[str, int]:
+    def get_stats(self, board_id: int | None = None) -> dict[str, int]:
         """Get attachment statistics.
+
+        Args:
+            board_id: Filter by notice board ID (optional).
 
         Returns:
             Dict with counts for total, downloaded, pending, failed, removed, etc.
         """
         with self.conn.cursor() as cur:
-            cur.execute(
-                """
+            query = """
                 SELECT
                     COUNT(*) AS total,
-                    COUNT(CASE WHEN download_status = 'downloaded' THEN 1 END) AS downloaded,
-                    COUNT(CASE WHEN download_status = 'pending' THEN 1 END) AS pending,
-                    COUNT(CASE WHEN download_status = 'failed' THEN 1 END) AS failed,
-                    COUNT(CASE WHEN download_status = 'removed' THEN 1 END) AS removed,
-                    COALESCE(SUM(file_size_bytes), 0) AS total_bytes
-                FROM attachments
-                """
-            )
+                    COUNT(CASE WHEN a.download_status = 'downloaded' THEN 1 END) AS downloaded,
+                    COUNT(CASE WHEN a.download_status = 'pending' THEN 1 END) AS pending,
+                    COUNT(CASE WHEN a.download_status = 'failed' THEN 1 END) AS failed,
+                    COUNT(CASE WHEN a.download_status = 'removed' THEN 1 END) AS removed,
+                    COALESCE(SUM(a.file_size_bytes), 0) AS total_bytes
+                FROM attachments a
+            """
+            params: list[int] = []
+            if board_id is not None:
+                query += " JOIN documents d ON d.id = a.document_id WHERE d.notice_board_id = %s"
+                params.append(board_id)
+
+            cur.execute(query, params)
             row = cur.fetchone()
             if row is None:
                 return {
