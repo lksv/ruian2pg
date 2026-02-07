@@ -384,6 +384,21 @@ ssh lukas@46.224.67.103 systemctl status ruian-ofn-sync.timer
 ssh lukas@46.224.67.103 journalctl -u ruian-ofn-sync.service --since "1 day ago"
 ```
 
+### Automated Text Extraction
+
+Text is extracted from document attachments every 2 hours via systemd timer (`ruian-text-extract.timer`). Runs 1 hour after OFN sync to process newly downloaded documents. Extracted text is stored in compressed SQLite (`data/texts/`), original attachments are not persisted.
+
+```bash
+# Check timer status
+ssh lukas@46.224.67.103 systemctl status ruian-text-extract.timer
+
+# View logs
+ssh lukas@46.224.67.103 journalctl -u ruian-text-extract.service --since "1 day ago"
+
+# Trigger manual run
+ssh lukas@46.224.67.103 sudo systemctl start ruian-text-extract.service
+```
+
 ### Local Development Services
 
 ```bash

@@ -89,3 +89,24 @@
     enabled: true
     state: started
     daemon_reload: true
+
+- name: Deploy text extraction systemd service
+  ansible.builtin.template:
+    src: ruian-text-extract.service.j2
+    dest: /etc/systemd/system/ruian-text-extract.service
+    mode: "0644"
+  notify: Reload systemd daemon
+
+- name: Deploy text extraction systemd timer
+  ansible.builtin.template:
+    src: ruian-text-extract.timer.j2
+    dest: /etc/systemd/system/ruian-text-extract.timer
+    mode: "0644"
+  notify: Reload systemd daemon
+
+- name: Enable and start text extraction timer
+  ansible.builtin.systemd:
+    name: ruian-text-extract.timer
+    enabled: true
+    state: started
+    daemon_reload: true

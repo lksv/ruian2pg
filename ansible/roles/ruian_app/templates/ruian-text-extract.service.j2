@@ -1,0 +1,14 @@
+[Unit]
+Description=Extract text from notice board document attachments
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={{ app_user }}
+WorkingDirectory={{ app_dir }}
+EnvironmentFile={{ app_dir }}/.env
+ExecStart={{ uv_bin }} run python scripts/extract_text.py --all --text-storage-path {{ data_dir }}/texts
+TimeoutStartSec=6900
+StandardOutput=journal
+StandardError=journal

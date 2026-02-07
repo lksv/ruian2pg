@@ -119,6 +119,7 @@ The following tasks run automatically via systemd timers:
 |-------|----------|-------------|
 | `certbot.timer` | 2x daily | Renew Let's Encrypt SSL certificates |
 | `ruian-ofn-sync.timer` | Every 4 hours | Download OFN notice board document metadata |
+| `ruian-text-extract.timer` | Every 2 hours | Extract text from notice board attachments (OCR) |
 
 Manage timers:
 
