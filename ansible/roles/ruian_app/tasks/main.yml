@@ -41,7 +41,7 @@
   ansible.builtin.shell: |
     export PATH="$HOME/.local/bin:$PATH"
     cd {{ app_dir }}
-    uv sync
+    uv sync --extra cpu
   args:
     executable: /bin/bash
   become: true
