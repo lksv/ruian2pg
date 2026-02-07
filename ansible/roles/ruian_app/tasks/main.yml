@@ -67,6 +67,7 @@
   loop:
     - "{{ data_dir }}"
     - "{{ data_dir }}/attachments"
+    - "{{ data_dir }}/texts"
 
 - name: Deploy OFN sync systemd service
   ansible.builtin.template:
